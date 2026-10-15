@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reel Pipeline Extractor</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --subtle: #fafaf8; --fg: #181816; --muted: #6f6f69;
+    --line: #e4e4df; --tile: #eeeeea; --accent: #181816; --accent-fg: #ffffff;
+    --bad: #b91c1c; --bad-bg: #fee2e2; --focus: #2563eb; --radius: 10px;
+    --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111110; --panel: #1a1a18; --subtle: #20201d; --fg: #f2f2ed; --muted: #999990;
+      --line: #2e2e2a; --tile: #242421; --accent: #f2f2ed; --accent-fg: #111110;
+      --bad: #f87171; --bad-bg: #3d1715; --focus: #60a5fa; --shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 14.5px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 80px; }
+  .brand { font-weight: 700; font-size: 17px; margin-bottom: 16px; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; margin-bottom: 20px; }
+  .input-row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+  textarea, select { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  textarea { flex: 1 1 420px; min-width: 0; min-height: 44px; padding: 10px 12px; resize: vertical; font-size: 14px; }
+  textarea:focus, select:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
+  select { padding: 9px 10px; font-size: 13.5px; }
+  .btn { padding: 11px 24px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg);
+         font: 600 14.5px/1 system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn.small { padding: 8px 14px; font-size: 13px; }
+  .recent { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13.5px; }
+  .recent select { max-width: 280px; }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  .msg { margin-top: 12px; padding: 10px 14px; border-radius: 8px; background: var(--bad-bg); color: var(--bad); font-weight: 500; font-size: 13.5px; }
+
+  .run-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .run-head h2 { margin: 0; font-size: 18px; }
+  .run-head a { color: var(--muted); font-size: 13px; word-break: break-all; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 14px; overflow-x: auto; }
+  .tab { padding: 9px 14px; border: none; background: none; color: var(--muted); font: 600 14px/1 system-ui, sans-serif;
+         cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+  .tab.active { color: var(--fg); border-bottom-color: var(--fg); }
+  .toolbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; font-size: 13.5px; }
+  .toolbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toolbar .spacer { flex: 1; }
+  .empty { color: var(--muted); padding: 18px 2px; }
+
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 4px 0 22px; }
+  .phone { width: 300px; max-width: 100%; aspect-ratio: 9 / 16; padding: 10px; border-radius: 34px; background: #111;
+           box-shadow: 0 10px 30px rgba(0,0,0,.25), inset 0 0 0 2px #333; }
+  .phone video { width: 100%; height: 100%; border-radius: 24px; display: block; background: #000; object-fit: cover; }
+  .phone-meta { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+  .grid.images { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+  @media (max-width: 520px) { .grid, .grid.images { grid-template-columns: repeat(2, 1fr); gap: 10px; } }
+  .item { background: var(--subtle); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+  .item.selected { outline: 2px solid var(--focus); outline-offset: -1px; }
+  .thumb { position: relative; background: #000; aspect-ratio: 9 / 16; cursor: pointer; display: grid; place-items: center; overflow: hidden; }
+  .thumb.wide { aspect-ratio: 16 / 10; }
+  .thumb.img { background: var(--tile); aspect-ratio: 1; cursor: zoom-in; }
+  .thumb video, .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .play { position: absolute; width: 46px; height: 46px; border-radius: 50%; background: rgba(0,0,0,.6); color: #fff;
+          display: grid; place-items: center; font-size: 17px; pointer-events: none; }
+  .thumb.playing .play { display: none; }
+  .badge { position: absolute; right: 6px; bottom: 6px; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,.72);
+           color: #fff; font-size: 11px; font-weight: 600; pointer-events: none; }
+  .thumb.playing .badge { display: none; }
+  .info { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; font-size: 12.5px; }
+  .info input { margin-top: 2px; }
+  .info .txt { min-width: 0; }
+  .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta { color: var(--muted); font-size: 11.5px; }
+  h3.sub { font-size: 14px; margin: 0 0 10px; color: var(--muted); font-weight: 600; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="brand">Reel Pipeline</div>
+
+  <section class="card">
+    <form id="form" autocomplete="off">
+      <div class="input-row">
+        <textarea id="urls" rows="2" spellcheck="false" aria-label="Website URLs, one per line"
+                  placeholder="https://gamma.app&#10;https://labs.google/pomelli"></textarea>
+        <button id="btn" class="btn" type="submit">Extract</button>
+        <label class="recent">Recent:
+          <select id="recent" aria-label="Open an earlier run"><option value="">Choose a run…</option></select>
+        </label>
+      </div>
+      <div class="hint">One URL per line. They run one after another.</div>
+      <div id="msg" class="msg" hidden></div>
+    </form>
+  </section>
+
+  <section id="results" class="card" hidden>
+    <div class="run-head"><h2 id="runName"></h2><a id="runUrl" target="_blank" rel="noopener"></a></div>
+    <div id="runMsg" class="msg" hidden style="margin:0 0 4px"></div>
+    <div id="tabsWrap">
+      <div class="tabs" role="tablist">
+        <button class="tab" data-cat="scroll" role="tab">Scroll (<span>0</span>)</button>
+        <button class="tab" data-cat="embedded" role="tab">Embedded Clips (<span>0</span>)</button>
+        <button class="tab" data-cat="gifs" role="tab">GIFs (<span>0</span>)</button>
+        <button class="tab" data-cat="images" role="tab">Images (<span>0</span>)</button>
+      </div>
+      <div id="toolbar" class="toolbar">
+        <label><input type="checkbox" id="selAll"> Select all</label>
+        <label>Sort
+          <select id="sort">
+            <option value="order">Page order</option>
+            <option value="size">Largest first</option>
+            <option value="duration">Longest first</option>
+            <option value="name">Name</option>
+          </select>
+        </label>
+        <span class="spacer"></span>
+        <button id="dl" class="btn small" type="button" disabled>Download selected</button>
+      </div>
+      <div id="panel"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const S = { run: null, cat: "scroll", sel: new Set(), job: null, userPicked: false };
+const CATS = ["scroll", "embedded", "gifs", "images"];
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  let body = null;
+  try { body = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((body && (body.error || body.detail)) || `Request failed (${r.status})`);
+  return body;
+}
+function bytes(n) {
+  if (!n) return "";
+  return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+}
+function secs(d) { return d ? (d >= 60 ? `${Math.floor(d / 60)}:${String(Math.round(d % 60)).padStart(2, "0")}` : d.toFixed(1) + "s") : ""; }
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function showMsg(box, text) { box.textContent = text || ""; box.hidden = !text; }
+
+// ---------- recent ----------
+async function loadRecent(select) {
+  let d;
+  try { d = await api("/api/extract-runs"); } catch (e) { return; }
+  const sel = $("recent"), keep = select || sel.value;
+  sel.innerHTML = '<option value="">Choose a run…</option>';
+  for (const r of d.runs) {
+    const o = el("option", null, `${r.url || r.name}${r.status === "failed" ? " (failed)" : ""}`);
+    o.value = r.name;
+    sel.append(o);
+  }
+  if (keep) sel.value = keep;
+  return d.runs;
+}
+$("recent").addEventListener("change", e => { if (e.target.value) { S.userPicked = true; openRun(e.target.value); } });
+
+// ---------- results ----------
+async function openRun(name) {
+  let d;
+  try { d = await api(`/api/extract/${encodeURIComponent(name)}`); }
+  catch (e) { showMsg($("msg"), e.message); return; }
+  S.run = d; S.sel.clear();
+  history.replaceState(null, "", "#" + name);
+  $("recent").value = name;
+  $("results").hidden = false;
+  $("runName").textContent = d.name;
+  $("runUrl").textContent = d.url || ""; $("runUrl").href = d.url || "#";
+  const failed = d.status === "failed";
+  showMsg($("runMsg"), failed ? (d.message || "Site failed - nothing extracted.") : "");
+  $("tabsWrap").hidden = failed;
+  for (const b of document.querySelectorAll(".tab")) b.querySelector("span").textContent = d.counts[b.dataset.cat] || 0;
+  S.cat = CATS.find(c => d.counts[c]) || "scroll";
+  render();
+}
+
+for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => { S.cat = b.dataset.cat; S.sel.clear(); render(); });
+$("sort").addEventListener("change", render);
+$("selAll").addEventListener("change", e => {
+  for (const it of items()) e.target.checked ? S.sel.add(it.path) : S.sel.delete(it.path);
+  render();
+});
+
+function items() {
+  const list = [...(S.run.categories[S.cat] || [])];
+  const by = $("sort").value;
+  const cmp = { order: (a, b) => a.order - b.order, size: (a, b) => b.size - a.size,
+                duration: (a, b) => (b.duration || 0) - (a.duration || 0), name: (a, b) => a.filename.localeCompare(b.filename) }[by];
+  return list.sort(cmp);
+}
+
+function render() {
+  for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.cat === S.cat);
+  $("sort").querySelector('[value="duration"]').hidden = S.cat === "images";
+  if (S.cat === "images" && $("sort").value === "duration") $("sort").value = "order";
+  const panel = $("panel");
+  stopAll();
+  panel.innerHTML = "";
+  const list = items();
+  $("toolbar").hidden = !list.length;
+  if (!list.length) { panel.append(el("div", "empty", S.run.empty[S.cat] || "Nothing found.")); syncSel(); return; }
+
+  if (S.cat === "scroll") {
+    const main = list.find(i => i.type === "page_scroll");
+    if (main) {
+      const wrap = el("div", "phone-wrap"), phone = el("div", "phone"), v = el("video");
+      Object.assign(v, { src: main.mp4_url, controls: true, muted: true, loop: true, playsInline: true, autoplay: true, preload: "auto" });
+      v.addEventListener("play", () => stopAll(v));
+      phone.append(v);
+      const meta = el("label", "phone-meta");
+      meta.append(checkbox(main), el("span", null, `${main.filename} · ${secs(main.duration)} · ${main.width}×${main.height} · ${bytes(main.size)}`));
+      wrap.append(phone, meta);
+      panel.append(wrap);
+    }
+    const clips = list.filter(i => i.type !== "page_scroll");
+    if (clips.length) {
+      panel.append(el("h3", "sub", "Section clips"));
+      const g = el("div", "grid");
+      clips.forEach(c => g.append(clipCard(c, false)));
+      panel.append(g);
+    }
+  } else if (S.cat === "images") {
+    const g = el("div", "grid images");
+    list.forEach(i => g.append(imageCard(i)));
+    panel.append(g);
+  } else {
+    const g = el("div", "grid");
+    list.forEach(c => g.append(clipCard(c, true)));
+    panel.append(g);
+  }
+  syncSel();
+}
+
+function zipPath(it) { return it.mp4 || it.path; }   // clips go in the zip as their .mp4 version
+
+function checkbox(it) {
+  const cb = el("input"); cb.type = "checkbox"; cb.checked = S.sel.has(it.path);
+  cb.addEventListener("change", () => { cb.checked ? S.sel.add(it.path) : S.sel.delete(it.path); syncSel(); });
+  cb.addEventListener("click", e => e.stopPropagation());
+  return cb;
+}
+
+function clipCard(it, sizeFromShape) {
+  const card = el("div", "item"); card.dataset.path = it.path;
+  const wide = sizeFromShape && it.width && it.height && it.width > it.height;
+  const thumb = el("div", "thumb" + (wide ? " wide" : ""));
+  const v = el("video");
+  Object.assign(v, { src: (it.mp4_url || it.url) + "#t=0.1", muted: true, playsInline: true, preload: "metadata", loop: true });
+  thumb.append(v, el("div", "play", "▶"));
+  if (it.duration) thumb.append(el("span", "badge", secs(it.duration)));
+  thumb.addEventListener("click", () => {
+    if (!v.paused) { v.pause(); thumb.classList.remove("playing"); v.controls = false; return; }
+    stopAll(v);
+    v.controls = true; thumb.classList.add("playing"); v.play().catch(() => {});
+  });
+  v.addEventListener("play", () => stopAll(v));
+  const info = el("div", "info"), txt = el("div", "txt");
+  txt.append(el("div", "name", it.filename), el("div", "meta", [bytes(it.mp4_size || it.size), it.width && `${it.width}×${it.height}`].filter(Boolean).join(" · ")));
+  txt.firstChild.title = it.filename;
+  info.append(checkbox(it), txt);
+  card.append(thumb, info);
+  return card;
+}
+
+function imageCard(it) {
+  const card = el("div", "item"); card.dataset.path = it.path;
+  const a = el("a", "thumb img"); a.href = it.url; a.target = "_blank"; a.rel = "noopener";
+  const img = el("img"); img.src = it.url; img.alt = it.filename; img.loading = "lazy";
+  a.append(img);
+  const info = el("div", "info"), txt = el("div", "txt");
+  txt.append(el("div", "name", it.filename), el("div", "meta", [it.width && `${it.width}×${it.height}`, bytes(it.size)].filter(Boolean).join(" · ")));
+  txt.firstChild.title = it.filename;
+  info.append(checkbox(it), txt);
+  card.append(a, info);
+  return card;
+}
+
+function stopAll(except) {
+  for (const v of document.querySelectorAll("#panel video")) {
+    if (v === except) continue;
+    if (!v.paused) v.pause();
+    const t = v.closest(".thumb");
+    if (t) { t.classList.remove("playing"); v.controls = false; }
+  }
+}
+
+function syncSel() {
+  const list = S.run ? items() : [];
+  const n = list.filter(i => S.sel.has(i.path)).length;
+  $("selAll").checked = list.length > 0 && n === list.length;
+  $("dl").disabled = n === 0;
+  $("dl").textContent = n ? `Download selected (${n})` : "Download selected";
+  for (const c of document.querySelectorAll("#panel .item")) c.classList.toggle("selected", S.sel.has(c.dataset.path));
+}
+
+$("dl").addEventListener("click", async () => {
+  const files = items().filter(i => S.sel.has(i.path)).map(zipPath);
+  if (!files.length) return;
+  $("dl").disabled = true;
+  try {
+    const r = await fetch(`/api/tool/${encodeURIComponent(S.run.name)}/zip-selected`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Download failed.");
+    const blob = await r.blob(), a = el("a");
+    a.href = URL.createObjectURL(blob); a.download = `${S.run.name}-${S.cat}.zip`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) { showMsg($("runMsg"), e.message); }
+  syncSel();
+});
+
+// ---------- extract ----------
+$("form").addEventListener("submit", e => { e.preventDefault(); extract(); });
+$("urls").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); extract(); } });
+
+async function extract() {
+  showMsg($("msg"), "");
+  const text = $("urls").value.trim();
+  if (!text) { showMsg($("msg"), "Paste a website URL first."); return; }
+  const fd = new FormData(); fd.append("url", text);
+  let start;
+  try { start = await api("/api/extract", { method: "POST", body: fd }); }
+  catch (e) { showMsg($("msg"), e.message); return; }
+  S.userPicked = false;
+  poll(start.job, start.names);
+}
+
+async function poll(jobId, names) {
+  const btn = $("btn");
+  btn.disabled = true;
+  btn.textContent = names.length > 1 ? `Extracting 1 of ${names.length}...` : "Extracting...";
+  let shown = 0, job = null;
+  while (true) {
+    await new Promise(r => setTimeout(r, 1500));
+    try { job = await api(`/api/job/${jobId}?since=999999`); }
+    catch (e) { if (/isn't known/.test(e.message)) break; continue; }
+    if (job.total > 1 && job.index) btn.textContent = `Extracting ${job.index} of ${job.total}...`;
+    const done = job.results || [];
+    if (done.length > shown) {
+      shown = done.length;
+      await loadRecent();
+      if (!S.userPicked && shown === 1) openRun(done[0].name);
+    }
+    if (job.status !== "running" && job.status !== "stopping") break;
+  }
+  btn.disabled = false;
+  btn.textContent = "Extract";
+  await loadRecent();
+  if (!S.userPicked && job && job.results && job.results.length) openRun(job.results[0].name);
+}
+
+(async function init() {
+  const runs = await loadRecent();
+  const hash = decodeURIComponent(location.hash.slice(1));
+  if (hash) openRun(hash);
+  else if (runs && runs.length) openRun(runs[0].name);
+  try {   // a batch already running on the server (e.g. page reloaded mid-run): show its progress
+    const r = await api("/api/extract-runs");
+    if (r.running) { $("btn").disabled = true; $("btn").textContent = "Extracting..."; }
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>

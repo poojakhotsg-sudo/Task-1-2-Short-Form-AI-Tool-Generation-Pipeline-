@@ -1,0 +1,14 @@
+playwright
+fastapi
+uvicorn
+python-multipart
+anthropic
+requests
+google-api-python-client
+google-auth-oauthlib
+opencv-python
+ffmpeg-python
+yt-dlp
+python-dotenv
+pydantic
+imagehash

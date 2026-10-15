@@ -1,0 +1,1649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reel Pipeline</title>
+<style>
+  :root {
+    --bg: #f5f5f2; --panel: #fff; --fg: #1c1c1a; --muted: #6b6b66; --line: #e3e3de; --soft: #f0f0ec;
+    --accent: #1c1c1a; --accent-fg: #fff;
+    --ok: #1a7f37; --ok-bg: #dcf5e3; --bad: #b42318; --bad-bg: #fde7e4; --warn: #8a5a00; --warn-bg: #fff1c2;
+    --log-bg: #141413; --log-fg: #e6e6e1;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121211; --panel: #1b1b19; --fg: #ecece6; --muted: #9a9a92; --line: #2d2d2a; --soft: #232320;
+      --accent: #ecece6; --accent-fg: #121211;
+      --ok: #5fd38a; --ok-bg: #173723; --bad: #ff8f80; --bad-bg: #3d1a16; --warn: #f5c451; --warn-bg: #3a2f10;
+      --log-bg: #0b0b0a;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: inherit; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  .wrap { max-width: 1440px; margin: 0 auto; padding: 0 16px; }
+
+  /* top bar */
+  .topbar { position: sticky; top: 0; z-index: 50; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .topbar .wrap { display: flex; gap: 12px; align-items: center; padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; }
+  .brand { font-weight: 700; font-size: 17px; margin-right: 6px; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+  .topbar-inputs { display: flex; gap: 10px; flex: 1 1 540px; min-width: 0; align-items: center; }
+  input, select, textarea { padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); min-width: 0; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+  #tool { flex: 1 1 160px; } 
+  #url { flex: 2 1 280px; }
+  .checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--muted); cursor: pointer; white-space: nowrap; user-select: none; }
+  .checkbox-label input { width: 16px; height: 16px; cursor: pointer; }
+  .pick { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13.5px; margin-left: auto; white-space: nowrap; }
+  .pick select { max-width: 220px; color: var(--fg); }
+
+  /* buttons */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--accent);
+         background: var(--accent); color: var(--accent-fg); cursor: pointer; text-decoration: none; white-space: nowrap; font-size: 14px; font-weight: 500; transition: all 0.15s ease; }
+  .btn:hover:not(:disabled) { opacity: 0.92; transform: translateY(-1px); }
+  .btn.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
+  .btn.ghost:hover:not(:disabled) { background: var(--soft); border-color: var(--fg); }
+  .btn.small { padding: 5px 11px; font-size: 13px; border-radius: 7px; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; transform: none !important; }
+
+  main.wrap { padding-top: 18px; padding-bottom: 48px; }
+  .panel { min-width: 0; overflow-wrap: anywhere; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+  .panel h2 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; gap: 10px; }
+  .panel h2 .spacer { flex: 1; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); padding: 14px; background: var(--soft); border-radius: 9px; font-size: 14px; }
+  .error-bar { background: var(--bad-bg); color: var(--bad); padding: 12px 16px; border-radius: 9px; margin-bottom: 16px; font-size: 14px; font-weight: 500; border: 1px solid var(--bad); }
+
+  /* 3-Step Flow Container */
+  .steps-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 900px) {
+    .steps-grid { grid-template-columns: 1fr; }
+  }
+  .step-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .step-card.active-step {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 1px #3b82f6;
+  }
+  .step-card.disabled-step {
+    opacity: 0.45;
+  }
+  .step-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .step-title {
+    font-size: 15px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .step-badge {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 99px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .step-badge.not-started { background: var(--soft); color: var(--muted); }
+  .step-badge.running { background: #2f81f7; color: #fff; animation: pulse 1s infinite alternate; }
+  .step-badge.done { background: var(--ok-bg); color: var(--ok); }
+  .step-badge.failed { background: var(--bad-bg); color: var(--bad); }
+
+  .step-action-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .step-main-btn {
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 15px;
+    font-weight: 600;
+    border-radius: 9px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .step-helper {
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .step-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .step-select {
+    width: 100%;
+    font-size: 13.5px;
+    padding: 7px 10px;
+    border-radius: 8px;
+  }
+  .step-note {
+    font-size: 11.5px;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* Red bot alert banner */
+  #botAlertBanner {
+    display: none;
+    background: var(--bad-bg);
+    border: 1.5px solid var(--bad);
+    color: var(--bad);
+    padding: 14px 18px;
+    border-radius: var(--radius);
+    margin-bottom: 20px;
+    font-size: 15px;
+    font-weight: 600;
+    align-items: center;
+    gap: 12px;
+  }
+  #botAlertBanner .bot-icon {
+    font-size: 22px;
+  }
+
+  /* log */
+  #logPanel { margin-bottom: 18px; }
+  .status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 14px; margin-bottom: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: 0 0 10px; }
+  .dot.running, .dot.stopping { background: #2f81f7; animation: pulse 1s infinite alternate; }
+  .dot.done { background: var(--ok); } .dot.failed, .dot.stopped { background: var(--bad); }
+  @keyframes pulse { to { opacity: .35; } }
+  #log { background: var(--log-bg); color: var(--log-fg); border-radius: 9px; padding: 12px; margin: 0; max-height: 280px;
+         overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+
+  /* results header */
+  .head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .head h1 { font-size: 22px; margin: 0; }
+  .head .summary { font-weight: 600; }
+  .head .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  .counts { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  /* layout */
+  .cols { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+  .left { display: grid; gap: 18px; min-width: 0; }
+  .right { min-width: 0; }
+  @media (min-width: 1100px) { .cols { grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); } .left { position: sticky; top: 84px; } }
+
+  /* website data */
+  .hero { width: 100%; border-radius: 9px; border: 1px solid var(--line); display: block; margin: 4px 0 12px; }
+  .site-title { font-weight: 600; font-size: 16px; text-decoration: none; }
+  .site-title:hover { text-decoration: underline; }
+  .desc { margin: 4px 0 10px; color: var(--muted); font-size: 14px; }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .stat { background: var(--soft); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+  .stat b { font-size: 15px; }
+  .sub { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px; }
+  ul.plain { list-style: none; padding: 0; margin: 0; font-size: 14px; }
+  ul.plain li { padding: 5px 0; border-bottom: 1px solid var(--line); }
+  ul.plain li:last-child { border-bottom: 0; }
+  .tag { font-size: 11px; font-weight: 700; color: var(--muted); margin-right: 6px; }
+  .feat b { display: block; font-weight: 600; }
+  .feat span { color: var(--muted); font-size: 13px; }
+  .links a { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 0; }
+  details summary { cursor: pointer; font-size: 14px; color: var(--muted); }
+
+  /* script */
+  #script { white-space: pre-wrap; background: var(--soft); border-radius: 9px; padding: 14px; margin: 0;
+            font: 13.5px/1.6 ui-monospace, Consolas, monospace; max-height: 480px; overflow: auto; }
+
+  /* shot table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+       font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.num { font-weight: 700; font-size: 16px; width: 36px; }
+  td.line { min-width: 160px; }
+  td.visual { min-width: 150px; color: var(--muted); }
+  td.reason { min-width: 120px; font-size: 13px; color: var(--muted); }
+  .clipbox { width: 150px; aspect-ratio: 9 / 16; border-radius: 8px; overflow: hidden; background: #000; position: relative; }
+  .clipbox video { width: 100%; height: 100%; object-fit: cover; display: block; cursor: pointer; }
+  .clipbox .none { position: absolute; inset: 0; display: grid; place-items: center; color: #888; font-size: 12px;
+                   background: repeating-linear-gradient(45deg, var(--soft), var(--soft) 8px, var(--panel) 8px, var(--panel) 16px); }
+  .clipbox .hint { position: absolute; left: 6px; bottom: 6px; font-size: 11px; color: #fff; background: rgba(0,0,0,.55);
+                   padding: 1px 6px; border-radius: 6px; pointer-events: none; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .badge.covered { background: var(--ok-bg); color: var(--ok); }
+  .badge.missing { background: var(--bad-bg); color: var(--bad); }
+  .badge.needs_manual { background: var(--warn-bg); color: var(--warn); }
+  .src { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--soft); white-space: nowrap; }
+  .rowactions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-top: 8px; }
+  .progress { font-size: 12px; color: var(--muted); }
+  .upload-error { font-size: 12px; color: var(--bad); }
+  td.score .tag { font-size: 12px; font-weight: 600; background: var(--soft); padding: 3px 8px; border-radius: 6px; color: var(--fg); }
+
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg);
+           padding: 9px 16px; border-radius: 9px; font-size: 14px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+
+  /* Gallery Tabs & Cards */
+  .tab-btn {
+    border-radius: 99px; padding: 5px 13px; font-size: 13px; font-weight: 500;
+    background: transparent; color: var(--muted); border: 1px solid var(--line); cursor: pointer;
+  }
+  .tab-btn:hover { color: var(--fg); border-color: var(--fg); }
+  .tab-btn.active { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .asset-card-ui {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    display: flex; flex-direction: column; overflow: hidden; transition: transform 0.15s, border-color 0.15s;
+  }
+  .asset-card-ui:hover { transform: translateY(-2px); border-color: var(--accent); }
+  .asset-thumb-box {
+    height: 150px; background: #000; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .asset-thumb-box img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
+  .asset-thumb-box video { width: 100%; height: 100%; object-fit: contain; cursor: pointer; }
+  .asset-info-ui { padding: 10px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .failed-box {
+    margin-top: 16px; padding: 12px 14px; background: var(--bad-bg); border-radius: 9px;
+    border: 1px solid var(--bad); color: var(--bad); font-size: 13px;
+  }
+  .failed-box ul { margin: 6px 0 0; padding-left: 18px; word-break: break-all; }
+
+  /* Playwright Result card */
+  .pw-card { margin-top: 18px; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .pw-card h3 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 10px; }
+  .pw-status-ok  { display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:99px;font-size:13px;font-weight:600;background:var(--ok-bg);color:var(--ok); }
+  .pw-status-bad { display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:99px;font-size:13px;font-weight:600;background:var(--bad-bg);color:var(--bad); }
+  .pw-shots { display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0; }
+  .pw-shots img { width:100%;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;display:block; }
+  .pw-shots .pw-shot-label { font-size:12px;color:var(--muted);text-align:center;margin-top:4px; }
+  .pw-kv-table { width:100%;border-collapse:collapse;font-size:13px;margin:10px 0; }
+  .pw-kv-table td { padding:5px 8px;border-bottom:1px solid var(--line); }
+  .pw-kv-table td:first-child { color:var(--muted);white-space:nowrap;width:46%; }
+  .pw-kv-table tr:last-child td { border-bottom:0; }
+  .pw-section-title { font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:14px 0 4px;font-weight:600; }
+  .pw-runlog { background:var(--log-bg);color:var(--log-fg);border-radius:8px;padding:10px 12px;max-height:220px;overflow:auto;
+               white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,Consolas,monospace;margin-top:6px; }
+  .pw-failed-list { margin:6px 0 0;padding-left:18px;font-size:13px;word-break:break-all; }
+  .pw-failed-list li { margin-bottom:4px; }
+  details.pw-details > summary { cursor:pointer;font-size:13px;color:var(--muted);padding:4px 0; }
+  details.pw-details > summary:hover { color:var(--fg); }
+  #pwResultCard { display:none; }
+
+  /* Fullscreen Slideshow Modal */
+  #slideshowModal {
+    position: fixed; inset: 0; background: #000; z-index: 200; display: none;
+    flex-direction: column; align-items: center; justify-content: space-between; padding: 20px;
+    color: #fff;
+  }
+  .slideshow-top {
+    width: 100%; max-width: 800px; display: flex; justify-content: space-between; align-items: center; z-index: 10;
+  }
+  .slideshow-title { font-size: 16px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 10px; }
+  .slideshow-close { background: transparent; border: none; color: #fff; font-size: 32px; cursor: pointer; line-height: 1; padding: 0 8px; }
+  .slideshow-stage {
+    flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; position: relative; min-height: 0;
+  }
+  .slideshow-card {
+    height: 100%; max-height: 78vh; aspect-ratio: 9 / 16; background: #111; border-radius: 12px; overflow: hidden;
+    position: relative; box-shadow: 0 10px 40px rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center;
+  }
+  .slideshow-video { width: 100%; height: 100%; object-fit: cover; }
+  .slideshow-blank {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    padding: 24px; text-align: center; color: #888; font-size: 15px; font-weight: 500;
+  }
+  .slideshow-subtitle-box {
+    position: absolute; bottom: 20px; left: 16px; right: 16px;
+    background: rgba(0,0,0,0.75); backdrop-filter: blur(8px); padding: 12px 16px; border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15); text-align: center; font-size: 14.5px; line-height: 1.4; color: #fff; font-weight: 500;
+  }
+  .slideshow-controls {
+    width: 100%; max-width: 600px; display: flex; flex-direction: column; gap: 8px; z-index: 10;
+  }
+  .slideshow-timeline {
+    width: 100%; height: 6px; background: rgba(255,255,255,0.25); border-radius: 99px; overflow: hidden; position: relative; cursor: pointer;
+  }
+  .slideshow-progress-bar {
+    height: 100%; background: #3b82f6; width: 0%; transition: width 0.1s linear;
+  }
+  .slideshow-btn-row {
+    display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #ccc;
+  }
+
+  /* Script Editor Modal */
+  #scriptEditorModal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 150; display: none;
+    align-items: center; justify-content: center; padding: 20px;
+  }
+  .editor-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    width: 100%; max-width: 680px; max-height: 85vh; display: flex; flex-direction: column; padding: 20px; gap: 14px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+  }
+  #customScriptText {
+    width: 100%; height: 320px; font: 13.5px/1.6 ui-monospace, Consolas, monospace; resize: vertical;
+  }
+
+  /* Media Modal (enlarge images & play videos) */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 120;
+    display: flex; align-items: center; justify-content: center; flex-direction: column; padding: 20px;
+  }
+  .modal-overlay img, .modal-overlay video {
+    max-width: 90vw; max-height: 80vh; object-fit: contain; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.7);
+  }
+  .modal-close {
+    position: absolute; top: 16px; right: 20px; font-size: 28px; color: #fff; cursor: pointer; background: transparent; border: none;
+  }
+  .modal-caption {
+    margin-top: 12px; color: #fff; font-size: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center;
+  }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR (always visible) -->
+<header class="topbar">
+  <div class="wrap">
+    <span class="brand">🎬 Reel Pipeline</span>
+    <div class="topbar-inputs">
+      <input id="tool" name="tool" placeholder="Tool name, e.g. Gamma or Pomelli" required maxlength="60" aria-label="Tool name">
+      <input id="url" name="url" placeholder="Website URL, e.g. https://gamma.app" required aria-label="Website URL">
+      <label class="checkbox-label" title="Launch Playwright in a visible browser window">
+        <input type="checkbox" id="headed"> Show browser
+      </label>
+    </div>
+    <label class="pick">Earlier runs
+      <select id="picker" aria-label="Open an earlier run"><option value="">Choose a tool…</option></select>
+    </label>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="formError" class="error-bar" hidden></div>
+
+  <!-- Red bot alert banner -->
+  <div id="botAlertBanner">
+    <span class="bot-icon">🛑</span>
+    <span id="botAlertText">Blocked: use the marketing URL or tick Show browser</span>
+  </div>
+
+  <!-- 3-STEP FLOW -->
+  <section class="steps-grid">
+
+    <!-- STEP 1: Get Visuals -->
+    <div class="step-card" id="step1Card">
+      <div class="step-header">
+        <span class="step-title">STEP 1: Get Visuals</span>
+        <span class="step-badge not-started" id="step1Badge">Not started</span>
+      </div>
+      <div class="step-action-row">
+        <button class="btn step-main-btn" id="step1Btn" type="button">1. Get Visuals</button>
+        <span class="step-helper">Extracts all images, videos, GIFs and mobile screenshots untouched. No AI, always works.</span>
+      </div>
+    </div>
+
+    <!-- STEP 2: Script (optional) -->
+    <div class="step-card disabled-step" id="step2Card">
+      <div class="step-header">
+        <span class="step-title">2. Script (optional)</span>
+        <span class="step-badge not-started" id="step2Badge">Not started</span>
+      </div>
+      <div class="step-action-row">
+        <div class="step-controls">
+          <select id="scriptChoiceSelect" class="step-select">
+            <option value="auto">Auto-build from website text (no AI)</option>
+            <option value="paste">Paste my own script</option>
+            <option value="ai" id="optGenerateAI">Generate with AI</option>
+          </select>
+          <button class="btn ghost" id="step2RunBtn" type="button" style="padding: 7px 14px; font-weight:600;">Apply</button>
+        </div>
+        <span class="step-helper">Creates a 30–45s timed script with shot list and narration beats.</span>
+        <span class="step-note">AI only. Skip if you don't have a key.</span>
+      </div>
+    </div>
+
+    <!-- STEP 3: Preview & Build -->
+    <div class="step-card disabled-step" id="step3Card">
+      <div class="step-header">
+        <span class="step-title">STEP 3: Preview & Build</span>
+        <span class="step-badge not-started" id="step3Badge">Not started</span>
+      </div>
+      <div class="step-action-row">
+        <div style="display:flex; gap:8px;">
+          <button class="btn step-main-btn" id="step3PreviewBtn" type="button" style="flex:1;">3. Preview</button>
+          <button class="btn ghost" id="step3AssembleBtn" type="button" style="flex:1;">Build rough cut</button>
+        </div>
+        <span class="step-helper">Preview the synchronized full-screen slideshow or compile clips into rough_cut.mp4.</span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- COLLAPSED ADVANCED SECTION -->
+  <details class="panel" style="margin-bottom: 20px;">
+    <summary style="cursor:pointer; font-weight:600; font-size:14px; color:var(--muted); user-select:none;">
+      ⚙️ Advanced: full pipeline
+    </summary>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px;">
+      <input id="num" placeholder="Optional Drive folder No., e.g. 01" style="width: 220px;" aria-label="Drive folder number">
+      <button class="btn ghost" id="runPipelineBtn" type="button">Run full pipeline</button>
+      <span class="muted" style="font-size:13px;">Runs script, grab, QA, match, trial, and assembler stages sequentially.</span>
+    </div>
+  </details>
+
+  <!-- Live log panel -->
+  <section id="logPanel" class="panel" hidden>
+    <div class="status">
+      <span id="dot" class="dot"></span>
+      <b id="logTool"></b>
+      <span id="logState" class="muted"></span>
+      <span style="flex:1"></span>
+      <button id="stopBtn" class="btn ghost small" type="button">Stop</button>
+      <button id="hideLog" class="btn ghost small" type="button">Hide log</button>
+    </div>
+    <pre id="log"></pre>
+  </section>
+
+  <!-- Live extraction progress -->
+  <div id="assetProgressBox" style="margin-top: 10px; margin-bottom: 18px; padding: 14px; background: var(--soft); border-radius: var(--radius); display: flex; flex-direction: column; gap: 8px;" hidden>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:600;">
+        <span id="assetProgressDot" class="dot running"></span>
+        <span id="assetProgressText">Starting extraction...</span>
+      </span>
+      <span id="assetProgressElapsed" class="muted" style="font-size:12px;">0:00</span>
+    </div>
+    <div style="width: 100%; height: 6px; background: var(--line); border-radius: 99px; overflow: hidden;">
+      <div id="assetProgressBar" style="width: 5%; height: 100%; background: #3b82f6; transition: width 0.3s;"></div>
+    </div>
+  </div>
+
+  <!-- GALLERY & PLAYWRIGHT RESULTS -->
+  <section class="panel" id="extractAssetsPanel" style="margin-bottom: 20px;" hidden>
+    <h2>
+      <span>🖼️ Media Gallery & Visuals</span>
+      <span class="spacer"></span>
+      <span id="assetStatusBadge" class="muted" style="font-weight:400;font-size:13px;"></span>
+    </h2>
+
+    <div id="assetGalleryUI" hidden>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top: 12px; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line);">
+        <button class="tab-btn active" data-tab="all" type="button">All (<span id="tabCountAll">0</span>)</button>
+        <button class="tab-btn" data-tab="image" type="button">Images (<span id="tabCountImages">0</span>)</button>
+        <button class="tab-btn" data-tab="gif" type="button">GIFs (<span id="tabCountGifs">0</span>)</button>
+        <button class="tab-btn" data-tab="video" type="button">Videos (<span id="tabCountVideos">0</span>)</button>
+        <button class="tab-btn" data-tab="embed" type="button">Embeds (<span id="tabCountEmbeds">0</span>)</button>
+        <span class="spacer"></span>
+        <span id="galleryStats" class="muted" style="font-size:13px;"></span>
+        <a id="openGalleryBtn" class="btn ghost small" href="#" target="_blank" rel="noopener">Open standalone gallery ↗</a>
+      </div>
+
+      <div id="assetGridUI" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px;"></div>
+
+      <div id="failedBox" class="failed-box" hidden>
+        <div style="font-weight: 700; margin-bottom: 6px;">⚠️ Failed Downloads (<span id="failedCount">0</span>)</div>
+        <ul id="failedList" style="margin:0; padding-left:18px;"></ul>
+      </div>
+    </div>
+
+    <!-- Playwright Result card below gallery -->
+    <div id="pwResultCard" class="pw-card"></div>
+  </section>
+
+  <div id="intro" class="empty">Enter a tool name and website above, then click <b>1. Get Visuals</b> to start. Or pick an earlier run from the dropdown.</div>
+
+  <!-- SCRIPT, SHOTS & PIPELINE OUTPUT -->
+  <section id="results" hidden>
+    <div class="head">
+      <h1 id="rTool"></h1>
+      <span class="summary" id="rSummary"></span>
+      <span class="counts" id="rCounts"></span>
+      <span class="actions" id="rActions"></span>
+    </div>
+
+    <!-- Rough cut preview card if ready -->
+    <div id="roughCutPlayerCard" class="panel" style="margin-bottom: 18px;" hidden>
+      <h2>🎥 Rough Cut Video <span class="spacer"></span><a id="roughCutDownloadLink" class="btn ghost small" href="#" download>Download MP4</a></h2>
+      <div style="max-width: 360px; margin: 0 auto; background: #000; border-radius: 9px; overflow: hidden;">
+        <video id="roughCutVideo" controls playsinline style="width: 100%; display: block; aspect-ratio: 9/16;"></video>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div class="left">
+        <section class="panel" id="sitePanel"><h2>Website data</h2><div id="site"></div></section>
+        <section class="panel">
+          <h2>Script <span class="spacer"></span><button class="btn ghost small" id="copyBtn" type="button">Copy</button></h2>
+          <div id="scriptBox"></div>
+        </section>
+      </div>
+      <div class="right">
+        <section class="panel">
+          <h2>Shot list <span class="spacer"></span><span class="muted" id="shotNote" style="font-weight:400;font-size:13px"></span></h2>
+          <div id="shots"></div>
+        </section>
+      </div>
+    </div>
+  </section>
+</main>
+
+<input type="file" id="fileInput" accept="video/*,.mp4,.mov,.webm,.m4v" hidden>
+
+<!-- Custom Script Editor Modal -->
+<div id="scriptEditorModal">
+  <div class="editor-card" onclick="event.stopPropagation()">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h3 style="margin:0; font-size:16px;">✍️ Paste Your Script</h3>
+      <button class="btn ghost small" type="button" onclick="closeScriptEditor()">Cancel</button>
+    </div>
+    <span class="muted" style="font-size:13px;">Format shots with [0-4s] HOOK - TITLE followed by the narration line. Or simply write each shot as a paragraph.</span>
+    <textarea id="customScriptText" placeholder="[0-4s] HOOK - MEET TOOL&#10;This is the simplest way to create presentations in seconds.&#10;&#10;[4-8s] STEP 1 - TYPE YOUR TOPIC&#10;Just enter what you want and watch it generate."></textarea>
+    <div style="display:flex; justify-content:flex-end; gap:8px;">
+      <button class="btn ghost" type="button" onclick="closeScriptEditor()">Cancel</button>
+      <button class="btn" id="saveScriptBtn" type="button">Save Script & Build Shots</button>
+    </div>
+  </div>
+</div>
+
+<!-- Fullscreen Slideshow Modal -->
+<div id="slideshowModal">
+  <div class="slideshow-top">
+    <div class="slideshow-title" id="slideTitle">SHOT 1: HOOK</div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <span id="slideTimeIndicator" style="font-size:13px; color:#aaa;">0:00 / 0:30</span>
+      <button class="slideshow-close" type="button" onclick="closeSlideshow()" aria-label="Close">&times;</button>
+    </div>
+  </div>
+
+  <div class="slideshow-stage">
+    <div class="slideshow-card">
+      <video id="slideVideo" class="slideshow-video" muted playsinline></video>
+      <div id="slideBlank" class="slideshow-blank" hidden>
+        <span style="font-size:32px;">⬛</span>
+        <span>No clip generated for this section</span>
+      </div>
+      <div id="slideSubtitle" class="slideshow-subtitle-box"></div>
+    </div>
+  </div>
+
+  <div class="slideshow-controls">
+    <div class="slideshow-timeline" id="slideTimeline" onclick="handleTimelineClick(event)">
+      <div class="slideshow-progress-bar" id="slideProgressBar"></div>
+    </div>
+    <div class="slideshow-btn-row">
+      <button class="btn ghost small" type="button" onclick="prevSlide()" style="color:#fff; border-color:#555;">⏮ Prev</button>
+      <button class="btn small" id="slidePlayBtn" type="button" onclick="togglePlayPause()" style="min-width:80px;">⏸ Pause</button>
+      <button class="btn ghost small" type="button" onclick="nextSlide()" style="color:#fff; border-color:#555;">Next ⏭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Lightbox Modal -->
+<div id="mediaModal" class="modal-overlay" style="display:none;" onclick="closeMediaModal()">
+  <button class="modal-close" type="button" onclick="closeMediaModal()" aria-label="Close modal">&times;</button>
+  <div id="modalMediaContainer" onclick="event.stopPropagation()"></div>
+  <div id="modalInfo" class="modal-caption" onclick="event.stopPropagation()"></div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const state = { job: null, since: 0, slug: null, data: null, uploadShot: null, config: { has_ai_key: false } };
+
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "text") el.textContent = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+function fill(el, ...kids) { el.replaceChildren(...kids.flat().filter((k) => k != null && k !== false)); return el; }
+const safeUrl = (u) => (typeof u === "string" && /^https?:\/\//i.test(u)) ? u : null;
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
+function toast(msg) {
+  const t = h("div", { class: "toast", text: msg, role: "status" });
+  document.body.append(t);
+  setTimeout(() => t.remove(), 2500);
+}
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  let body = null;
+  try { body = await res.json(); } catch (e) {}
+  if (!res.ok) throw new Error((body && body.error) || `Request failed (${res.status})`);
+  return body;
+}
+
+// Check server config for AI key
+async function checkConfig() {
+  try {
+    const cfg = await api("/api/config");
+    state.config = cfg;
+    const optAI = $("optGenerateAI");
+    if (!cfg.has_ai_key) {
+      optAI.disabled = true;
+      optAI.title = "No API key";
+      optAI.textContent = "Generate with AI (No API key)";
+    } else {
+      optAI.disabled = false;
+      optAI.title = "";
+      optAI.textContent = "Generate with AI";
+    }
+  } catch (e) {}
+}
+
+// ---------- tools dropdown ----------
+async function refreshTools(select) {
+  let r;
+  try { r = await api("/api/tools"); } catch (e) { return; }
+  const picker = $("picker");
+  const current = select || picker.value;
+  fill(picker, h("option", { value: "", text: r.tools.length ? "Choose a tool…" : "No runs yet" }));
+  for (const t of r.tools) picker.append(h("option", { value: t.slug, text: t.slug + (r.running[t.slug] ? " (running)" : "") }));
+  if (current && r.tools.some((t) => t.slug === current)) picker.value = current;
+  return r;
+}
+$("picker").addEventListener("change", (e) => { if (e.target.value) openTool(e.target.value); });
+
+// Update status badges and enabled states for 3 steps
+function updateStepUI(d) {
+  const s1Badge = $("step1Badge");
+  const s2Badge = $("step2Badge");
+  const s3Badge = $("step3Badge");
+  const s2Card = $("step2Card");
+  const s3Card = $("step3Card");
+
+  // Step 1 status
+  if (d && (d.assets_summary || (d.assets && d.assets.length) || d.has_manifest)) {
+    s1Badge.className = "step-badge done";
+    s1Badge.textContent = "Done";
+  } else if (d && d.blocked) {
+    s1Badge.className = "step-badge failed";
+    s1Badge.textContent = "Failed";
+  } else {
+    s1Badge.className = "step-badge not-started";
+    s1Badge.textContent = "Not started";
+  }
+
+  // Step 2 & 3 enabled only after Step 1 is done
+  const step1Done = s1Badge.textContent === "Done";
+  if (step1Done) {
+    s2Card.classList.remove("disabled-step");
+    s3Card.classList.remove("disabled-step");
+  } else {
+    s2Card.classList.add("disabled-step");
+    s3Card.classList.add("disabled-step");
+  }
+
+  // Step 2 status
+  if (d && d.script && d.shots && d.shots.length) {
+    s2Badge.className = "step-badge done";
+    s2Badge.textContent = "Done";
+  } else {
+    s2Badge.className = "step-badge not-started";
+    s2Badge.textContent = "Not started";
+  }
+
+  // Step 3 status
+  if (d && d.rough_cut) {
+    s3Badge.className = "step-badge done";
+    s3Badge.textContent = "Done";
+  } else {
+    s3Badge.className = "step-badge not-started";
+    s3Badge.textContent = "Not started";
+  }
+}
+
+// Bot alert banner helper
+function showBotAlert(msg) {
+  const banner = $("botAlertBanner");
+  const txt = $("botAlertText");
+  txt.textContent = msg || "Blocked: use the marketing URL or tick Show browser";
+  banner.style.display = "flex";
+}
+function hideBotAlert() {
+  $("botAlertBanner").style.display = "none";
+}
+
+// ==========================================
+// STEP 1: Get Visuals
+// ==========================================
+$("step1Btn").addEventListener("click", async () => {
+  hideBotAlert();
+  $("formError").hidden = true;
+  const tool = $("tool").value.trim();
+  const url = $("url").value.trim();
+  if (!tool) {
+    $("formError").textContent = "Please enter a tool name.";
+    $("formError").hidden = false;
+    $("tool").focus();
+    return;
+  }
+  if (!url) {
+    $("formError").textContent = "Please enter a website URL.";
+    $("formError").hidden = false;
+    $("url").focus();
+    return;
+  }
+
+  $("step1Btn").disabled = true;
+  $("step1Badge").className = "step-badge running";
+  $("step1Badge").textContent = "Running";
+  $("assetProgressBox").hidden = false;
+  $("assetProgressText").textContent = "Navigating to website...";
+  $("assetProgressElapsed").textContent = "0:00";
+  $("assetProgressBar").style.width = "10%";
+
+  try {
+    const fd = new FormData();
+    fd.append("tool", tool);
+    fd.append("url", url);
+    fd.append("headed", $("headed").checked ? "1" : "0");
+    const r = await api("/api/extract-assets", { method: "POST", body: fd });
+    attachAssetJob(r.job, tool, r.slug);
+    refreshTools(r.slug);
+  } catch (err) {
+    $("formError").textContent = err.message;
+    $("formError").hidden = false;
+    $("assetProgressBox").hidden = true;
+    $("step1Btn").disabled = false;
+    $("step1Badge").className = "step-badge failed";
+    $("step1Badge").textContent = "Failed";
+  }
+});
+
+function attachAssetJob(jobId, toolName, slug) {
+  state.job = jobId;
+  state.since = 0;
+  store.set("lastJob", jobId);
+
+  const poll = async () => {
+    let r;
+    try {
+      r = await api(`/api/job/${jobId}?since=${state.since}`);
+    } catch (e) {
+      if (/isn't known/.test(e.message)) {
+        $("assetProgressText").textContent = e.message;
+        $("step1Btn").disabled = false;
+        return;
+      }
+      setTimeout(poll, 1500);
+      return;
+    }
+
+    if (r.lines && r.lines.length) {
+      state.since = r.next;
+      for (const ln of r.lines) {
+        if (ln.includes("Blocked:") || ln.includes("[BLOCKED]")) {
+          showBotAlert("Blocked: use the marketing URL or tick Show browser");
+        }
+      }
+    }
+
+    $("assetProgressElapsed").textContent = r.elapsed || "0:00";
+    if (r.stage) {
+      $("assetProgressText").textContent = r.stage;
+      const m = r.stage.match(/(\d+)\/(\d+)\s+files/);
+      if (m) {
+        const cur = parseInt(m[1], 10), tot = parseInt(m[2], 10);
+        if (tot > 0) {
+          const pct = Math.min(95, Math.round((cur / tot) * 80) + 15);
+          $("assetProgressBar").style.width = `${pct}%`;
+        }
+      } else if (r.stage.includes("Scrolling")) {
+        $("assetProgressBar").style.width = "25%";
+      } else if (r.stage.includes("Extracting")) {
+        $("assetProgressBar").style.width = "40%";
+      }
+    }
+
+    if (r.status === "running" || r.status === "stopping") {
+      setTimeout(poll, 1000);
+      return;
+    }
+
+    $("assetProgressBar").style.width = "100%";
+    $("assetProgressText").textContent = r.status === "done" ? "Visuals ready!" : `Finished: ${r.status}`;
+    $("step1Btn").disabled = false;
+    setTimeout(() => { $("assetProgressBox").hidden = true; }, 2000);
+
+    await refreshTools(r.slug);
+    openTool(r.slug);
+  };
+  poll();
+}
+
+// ==========================================
+// STEP 2: Script (optional)
+// ==========================================
+$("step2RunBtn").addEventListener("click", async () => {
+  if ($("step2Card").classList.contains("disabled-step")) return;
+  const choice = $("scriptChoiceSelect").value;
+  const slug = state.slug || $("tool").value.trim().toLowerCase();
+  if (!slug) {
+    toast("Please enter a tool name and complete Step 1 first.");
+    return;
+  }
+
+  if (choice === "paste") {
+    openScriptEditor();
+    return;
+  }
+
+  if (choice === "auto") {
+    $("step2RunBtn").disabled = true;
+    $("step2Badge").className = "step-badge running";
+    $("step2Badge").textContent = "Running";
+    try {
+      await api(`/api/tool/${encodeURIComponent(slug)}/script/auto`, { method: "POST" });
+      toast("Auto-script built from website text!");
+      openTool(slug);
+    } catch (e) {
+      toast(e.message);
+      $("step2Badge").className = "step-badge failed";
+      $("step2Badge").textContent = "Failed";
+    } finally {
+      $("step2RunBtn").disabled = false;
+    }
+    return;
+  }
+
+  if (choice === "ai") {
+    if (!state.config.has_ai_key) {
+      toast("No API key configured in .env. Skip or use Auto-build.");
+      return;
+    }
+    $("step2RunBtn").disabled = true;
+    $("step2Badge").className = "step-badge running";
+    $("step2Badge").textContent = "Running";
+    try {
+      const fd = new FormData();
+      fd.append("url", $("url").value.trim());
+      await api(`/api/tool/${encodeURIComponent(slug)}/script/generate`, { method: "POST", body: fd });
+      toast("AI script generated!");
+      openTool(slug);
+    } catch (e) {
+      toast(e.message);
+      $("step2Badge").className = "step-badge failed";
+      $("step2Badge").textContent = "Failed";
+    } finally {
+      $("step2RunBtn").disabled = false;
+    }
+  }
+});
+
+function openScriptEditor() {
+  const modal = $("scriptEditorModal");
+  const ta = $("customScriptText");
+  if (state.data && state.data.script) {
+    ta.value = state.data.script;
+  }
+  modal.style.display = "flex";
+  ta.focus();
+}
+function closeScriptEditor() {
+  $("scriptEditorModal").style.display = "none";
+}
+$("saveScriptBtn").addEventListener("click", async () => {
+  const slug = state.slug || $("tool").value.trim().toLowerCase();
+  const text = $("customScriptText").value.trim();
+  if (!text) { toast("Please enter your script."); return; }
+  $("saveScriptBtn").disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append("script_text", text);
+    await api(`/api/tool/${encodeURIComponent(slug)}/script/save`, { method: "POST", body: fd });
+    toast("Script saved!");
+    closeScriptEditor();
+    openTool(slug);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    $("saveScriptBtn").disabled = false;
+  }
+});
+
+// ==========================================
+// STEP 3: Preview & Build
+// ==========================================
+$("step3PreviewBtn").addEventListener("click", () => {
+  if ($("step3Card").classList.contains("disabled-step")) return;
+  if (!state.data || !state.data.shots || !state.data.shots.length) {
+    toast("No shots available to preview. Run Step 1 & Step 2 first.");
+    return;
+  }
+  startSlideshow();
+});
+
+$("step3AssembleBtn").addEventListener("click", async () => {
+  if ($("step3Card").classList.contains("disabled-step")) return;
+  const slug = state.slug || $("tool").value.trim().toLowerCase();
+  if (!slug) return;
+  $("step3AssembleBtn").disabled = true;
+  $("step3Badge").className = "step-badge running";
+  $("step3Badge").textContent = "Running";
+  try {
+    const r = await api(`/api/tool/${encodeURIComponent(slug)}/assemble`, { method: "POST" });
+    toast("Rough cut assembled!");
+    openTool(slug);
+  } catch (e) {
+    toast(e.message);
+    $("step3Badge").className = "step-badge failed";
+    $("step3Badge").textContent = "Failed";
+  } finally {
+    $("step3AssembleBtn").disabled = false;
+  }
+});
+
+// Fullscreen Slideshow Implementation
+let slideState = {
+  shots: [],
+  index: 0,
+  isPlaying: false,
+  timer: null,
+  shotTime: 0,
+  shotDuration: 4,
+  totalElapsed: 0,
+  totalDuration: 0,
+};
+
+function startSlideshow() {
+  const shots = state.data.shots || [];
+  if (!shots.length) return;
+  slideState.shots = shots;
+  slideState.index = 0;
+  slideState.totalDuration = shots.reduce((acc, s) => acc + (s.duration || 4.0), 0);
+  slideState.totalElapsed = 0;
+
+  const modal = $("slideshowModal");
+  modal.style.display = "flex";
+  slideState.isPlaying = true;
+  $("slidePlayBtn").textContent = "⏸ Pause";
+  loadCurrentSlide();
+}
+
+function loadCurrentSlide() {
+  clearTimeout(slideState.timer);
+  const s = slideState.shots[slideState.index];
+  if (!s) return;
+
+  slideState.shotDuration = s.duration || 4.0;
+  slideState.shotTime = 0;
+
+  const titleText = `SHOT ${s.shot}: ${(s.visual_needed || s.source || "").toUpperCase()}`;
+  $("slideTitle").textContent = titleText;
+  $("slideSubtitle").textContent = s.script_line || "(No script narration for this shot)";
+
+  const video = $("slideVideo");
+  const blank = $("slideBlank");
+
+  if (s.clip) {
+    blank.hidden = true;
+    video.hidden = false;
+    video.src = s.clip;
+    video.currentTime = 0;
+    if (slideState.isPlaying) {
+      video.play().catch(() => {});
+    }
+  } else {
+    video.pause();
+    video.hidden = true;
+    blank.hidden = false;
+  }
+
+  updateSlideshowProgress();
+  if (slideState.isPlaying) {
+    runSlideClock();
+  }
+}
+
+function runSlideClock() {
+  clearTimeout(slideState.timer);
+  slideState.timer = setTimeout(() => {
+    slideState.shotTime += 0.1;
+    updateSlideshowProgress();
+    if (slideState.shotTime >= slideState.shotDuration) {
+      if (slideState.index < slideState.shots.length - 1) {
+        slideState.index++;
+        loadCurrentSlide();
+      } else {
+        slideState.isPlaying = false;
+        $("slidePlayBtn").textContent = "▶ Play";
+      }
+    } else {
+      runSlideClock();
+    }
+  }, 100);
+}
+
+function updateSlideshowProgress() {
+  let elapsedBefore = 0;
+  for (let i = 0; i < slideState.index; i++) {
+    elapsedBefore += (slideState.shots[i].duration || 4.0);
+  }
+  const curTotal = Math.min(slideState.totalDuration, elapsedBefore + slideState.shotTime);
+  const pct = Math.min(100, (curTotal / (slideState.totalDuration || 1)) * 100);
+  $("slideProgressBar").style.width = `${pct}%`;
+
+  const mCur = Math.floor(curTotal / 60), sCur = Math.floor(curTotal % 60);
+  const mTot = Math.floor(slideState.totalDuration / 60), sTot = Math.floor(slideState.totalDuration % 60);
+  $("slideTimeIndicator").textContent = `${mCur}:${sCur < 10 ? '0' : ''}${sCur} / ${mTot}:${sTot < 10 ? '0' : ''}${sTot}`;
+}
+
+function togglePlayPause() {
+  slideState.isPlaying = !slideState.isPlaying;
+  const video = $("slideVideo");
+  if (slideState.isPlaying) {
+    $("slidePlayBtn").textContent = "⏸ Pause";
+    if (!video.hidden) video.play().catch(() => {});
+    runSlideClock();
+  } else {
+    $("slidePlayBtn").textContent = "▶ Play";
+    if (!video.hidden) video.pause();
+    clearTimeout(slideState.timer);
+  }
+}
+
+function nextSlide() {
+  if (slideState.index < slideState.shots.length - 1) {
+    slideState.index++;
+    loadCurrentSlide();
+  }
+}
+function prevSlide() {
+  if (slideState.index > 0) {
+    slideState.index--;
+    loadCurrentSlide();
+  }
+}
+
+function closeSlideshow() {
+  clearTimeout(slideState.timer);
+  slideState.isPlaying = false;
+  const video = $("slideVideo");
+  video.pause();
+  video.src = "";
+  $("slideshowModal").style.display = "none";
+}
+
+function handleTimelineClick(e) {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const targetTime = ratio * slideState.totalDuration;
+
+  let acc = 0;
+  for (let i = 0; i < slideState.shots.length; i++) {
+    const dur = slideState.shots[i].duration || 4.0;
+    if (acc + dur >= targetTime || i === slideState.shots.length - 1) {
+      slideState.index = i;
+      slideState.shotTime = targetTime - acc;
+      loadCurrentSlide();
+      break;
+    }
+    acc += dur;
+  }
+}
+
+window.addEventListener("keydown", (e) => {
+  if ($("slideshowModal").style.display === "flex") {
+    if (e.key === "Escape") closeSlideshow();
+    else if (e.key === " ") { e.preventDefault(); togglePlayPause(); }
+    else if (e.key === "ArrowRight") nextSlide();
+    else if (e.key === "ArrowLeft") prevSlide();
+  }
+});
+
+// ==========================================
+// ADVANCED FULL PIPELINE
+// ==========================================
+$("runPipelineBtn").addEventListener("click", async () => {
+  $("formError").hidden = true;
+  const tool = $("tool").value.trim();
+  const url = $("url").value.trim();
+  const num = $("num").value.trim();
+  if (!tool || !url) {
+    $("formError").textContent = "Please enter tool name and website URL.";
+    $("formError").hidden = false;
+    return;
+  }
+  $("runPipelineBtn").disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append("tool", tool);
+    fd.append("url", url);
+    if (num) fd.append("num", num);
+    const r = await api("/api/run", { method: "POST", body: fd });
+    attachJob(r.job, tool);
+    refreshTools(r.slug);
+  } catch (err) {
+    $("formError").textContent = err.message;
+    $("formError").hidden = false;
+  } finally {
+    $("runPipelineBtn").disabled = false;
+  }
+});
+
+function attachJob(jobId, toolName) {
+  state.job = jobId; state.since = 0;
+  $("log").textContent = "";
+  $("logTool").textContent = toolName || "";
+  $("logPanel").hidden = false;
+  $("stopBtn").hidden = false; $("stopBtn").disabled = false;
+  store.set("lastJob", jobId);
+  pollJob(jobId);
+}
+
+async function pollJob(jobId) {
+  if (state.job !== jobId) return;
+  let r;
+  try { r = await api(`/api/job/${jobId}?since=${state.since}`); }
+  catch (e) {
+    if (/isn't known/.test(e.message)) { $("logState").textContent = e.message; $("stopBtn").hidden = true; return; }
+    setTimeout(() => pollJob(jobId), 2000); return;
+  }
+  const log = $("log");
+  if (r.lines.length) {
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    log.textContent += (state.since ? "\n" : "") + r.lines.join("\n");
+    state.since = r.next;
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+  $("logTool").textContent = r.tool;
+  $("logState").textContent = `${r.status}${r.stage ? " · " + r.stage : ""} · ${r.elapsed}`;
+  $("dot").className = "dot " + r.status;
+  if (r.status === "running" || r.status === "stopping") { setTimeout(() => pollJob(jobId), 1000); return; }
+  $("stopBtn").hidden = true;
+  await refreshTools(r.slug);
+  openTool(r.slug);
+}
+
+$("stopBtn").addEventListener("click", async () => {
+  if (!state.job) return;
+  $("stopBtn").disabled = true;
+  try { await api(`/api/job/${state.job}/stop`, { method: "POST" }); } catch (e) { toast(e.message); }
+});
+$("hideLog").addEventListener("click", () => { $("logPanel").hidden = true; });
+
+// ==========================================
+// RESULTS & RENDERING
+// ==========================================
+let currentAssetTab = "all";
+let currentToolAssets = [];
+
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentAssetTab = btn.getAttribute("data-tab") || "all";
+    renderAssetGrid();
+  });
+});
+
+async function openTool(slug) {
+  state.slug = slug;
+  $("picker").value = slug;
+  if (location.hash !== "#" + slug) history.replaceState(null, "", "#" + slug);
+  store.set("lastTool", slug);
+  let d;
+  try { d = await api(`/api/tool/${encodeURIComponent(slug)}`); }
+  catch (e) { $("intro").hidden = false; $("intro").textContent = e.message; $("results").hidden = true; return; }
+  state.data = d;
+  $("intro").hidden = true;
+  $("results").hidden = false;
+
+  const toolName = d.tool || slug;
+  $("tool").value = toolName;
+  if (d.url) $("url").value = d.url;
+
+  if (d.blocked) {
+    showBotAlert(d.blocked_message);
+  } else {
+    hideBotAlert();
+  }
+
+  updateStepUI(d);
+  renderHead(d);
+  renderAssets(d);
+  renderPlaywrightResult(d);
+  renderRoughCutPlayer(d);
+  renderSite(d);
+  renderScript(d);
+  renderShots(d);
+}
+
+function renderHead(d) {
+  $("rTool").textContent = d.tool;
+  const s = d.summary;
+  $("rSummary").textContent = s.total ? `${s.covered} of ${s.total} shots covered` : (d.assets_summary ? `${d.assets_summary.total} media assets extracted` : "No shots yet");
+  const countsKids = [];
+  if (s.missing) countsKids.push(h("span", { class: "badge missing", text: `${s.missing} missing` }));
+  if (s.needs_manual) countsKids.push(h("span", { class: "badge needs_manual", text: `${s.needs_manual} needs manual` }));
+  if (d.running) countsKids.push(h("span", { class: "badge", text: "run in progress" }));
+  if (d.assets_summary) countsKids.push(h("span", { class: "badge covered", text: `${d.assets_summary.total} assets (${d.assets_summary.size_human})` }));
+  fill($("rCounts"), ...countsKids);
+
+  const drive = safeUrl(d.drive);
+  fill($("rActions"), 
+    d.gallery_url ? h("a", { class: "btn small", href: d.gallery_url, target: "_blank", rel: "noopener", text: "🖼️ Standalone Gallery" }) : null,
+    drive ? h("a", { class: "btn small", href: drive, target: "_blank", rel: "noopener", text: "Drive folder" }) : null,
+    d.rough_cut ? h("a", { class: "btn ghost small", href: d.rough_cut, target: "_blank", text: "Rough cut" }) : null,
+    h("a", { class: "btn ghost small", href: `/api/tool/${encodeURIComponent(d.slug)}/zip`, text: "Download zip" }),
+  );
+}
+
+function renderRoughCutPlayer(d) {
+  const card = $("roughCutPlayerCard");
+  const vid = $("roughCutVideo");
+  const dl = $("roughCutDownloadLink");
+  if (d.rough_cut) {
+    card.hidden = false;
+    vid.src = d.rough_cut;
+    dl.href = d.rough_cut;
+  } else {
+    card.hidden = true;
+    vid.src = "";
+  }
+}
+
+function renderAssets(d) {
+  currentToolAssets = d.assets || [];
+  const panel = $("extractAssetsPanel");
+  const galleryBox = $("assetGalleryUI");
+  const openGalleryBtn = $("openGalleryBtn");
+  const statsEl = $("galleryStats");
+  const badgeEl = $("assetStatusBadge");
+
+  if (!currentToolAssets.length && !d.playwright_report) {
+    panel.hidden = true;
+    galleryBox.hidden = true;
+    badgeEl.textContent = "No assets extracted yet";
+    return;
+  }
+
+  panel.hidden = false;
+  galleryBox.hidden = false;
+  openGalleryBtn.href = d.gallery_url || "#";
+
+  const total = currentToolAssets.length;
+  const numImages = currentToolAssets.filter(a => a.type === "image" || a.type === "svg").length;
+  const numGifs = currentToolAssets.filter(a => a.type === "gif").length;
+  const numVideos = currentToolAssets.filter(a => a.type === "video").length;
+  const numEmbeds = currentToolAssets.filter(a => a.type === "embed").length;
+
+  $("tabCountAll").textContent = total;
+  $("tabCountImages").textContent = numImages;
+  $("tabCountGifs").textContent = numGifs;
+  $("tabCountVideos").textContent = numVideos;
+  $("tabCountEmbeds").textContent = numEmbeds;
+
+  const szStr = d.assets_summary ? d.assets_summary.size_human : "";
+  statsEl.textContent = `${total} assets (${szStr})`;
+  badgeEl.textContent = `${total} assets ready`;
+
+  renderAssetGrid();
+  renderFailedDownloads(d.failed_downloads);
+}
+
+function renderAssetGrid() {
+  const grid = $("assetGridUI");
+  const filtered = currentToolAssets.filter((a) => {
+    if (currentAssetTab === "all") return true;
+    if (currentAssetTab === "image") return a.type === "image" || a.type === "svg";
+    if (currentAssetTab === "gif") return a.type === "gif";
+    if (currentAssetTab === "video") return a.type === "video";
+    if (currentAssetTab === "embed") return a.type === "embed";
+    return true;
+  });
+
+  if (!filtered.length) {
+    fill(grid, h("div", { class: "empty", style: "grid-column: 1 / -1;", text: `No assets in tab: ${currentAssetTab}` }));
+    return;
+  }
+
+  const cards = filtered.map((a) => {
+    const isVid = a.type === "video" || (a.type === "embed" && a.public_url);
+    const isImg = a.type === "image" || a.type === "svg" || a.type === "gif";
+
+    let thumb;
+    if (isVid && a.public_url) {
+      thumb = h("div", { class: "asset-thumb-box" },
+        h("video", {
+          src: a.public_url,
+          controls: true,
+          playsinline: true,
+          preload: "metadata",
+          title: "Click play to watch video",
+          "aria-label": a.file_name || "Video asset",
+        })
+      );
+    } else if (isImg && a.public_url) {
+      thumb = h("div", { class: "asset-thumb-box" },
+        h("img", {
+          src: a.public_url,
+          alt: a.file_name || "",
+          loading: "lazy",
+          title: "Click to enlarge image",
+          onclick: () => openImageModal(a.public_url, a.file_name, a.dimensions, a.section, a.size_human),
+        })
+      );
+    } else {
+      thumb = h("div", { class: "asset-thumb-box", style: "background:var(--soft);color:var(--muted);padding:10px;text-align:center;font-size:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;" },
+        h("div", { style: "font-size:1.5rem;margin-bottom:4px;", text: "▶️" }),
+        h("div", { text: "Embed Stream" }),
+        h("a", { href: a.source_url, target: "_blank", rel: "noopener", class: "btn small ghost", style: "margin-top:6px;font-size:11px;", text: "Open Embed ↗" })
+      );
+    }
+
+    const dims = a.dimensions && a.dimensions.width ? `${a.dimensions.width}×${a.dimensions.height}` : "";
+
+    return h("div", { class: "asset-card-ui" },
+      thumb,
+      h("div", { class: "asset-info-ui" },
+        h("div", { style: "display:flex;justify-content:space-between;align-items:center;" },
+          h("span", { class: "tag", text: (a.type || "image").toUpperCase() }),
+          h("span", { class: "src", text: a.size_human || "" })
+        ),
+        a.section ? h("div", { class: "muted", style: "font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", title: a.section, text: "📌 " + a.section }) : null,
+        h("div", { style: "font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", title: a.file_name || a.source_url },
+          a.file_name ? h("a", { href: a.public_url || a.source_url, target: "_blank", style: "color:inherit;text-decoration:none;", text: a.file_name }) : "(Embed Stream)"
+        ),
+        dims ? h("div", { class: "muted", style: "font-size:11px;", text: dims }) : null
+      )
+    );
+  });
+
+  fill(grid, ...cards);
+}
+
+function renderFailedDownloads(fails) {
+  const box = $("failedBox");
+  const list = $("failedList");
+  const countEl = $("failedCount");
+
+  if (!fails || !fails.length) {
+    box.hidden = true;
+    return;
+  }
+
+  box.hidden = false;
+  countEl.textContent = fails.length;
+  const items = fails.map((f) => {
+    return h("li", {},
+      f.section ? h("span", { style: "font-weight:600;margin-right:6px;", text: `[${f.section}]` }) : null,
+      h("a", { href: f.url, target: "_blank", rel: "noopener", style: "color:inherit;text-decoration:underline;", text: f.url }),
+      h("span", { style: "margin-left:6px;opacity:0.85;", text: `— ${f.reason}` })
+    );
+  });
+  fill(list, ...items);
+}
+
+function renderPlaywrightResult(d) {
+  const card = $("pwResultCard");
+  const pr = d.playwright_report;
+  if (!pr) { card.style.display = "none"; return; }
+  card.style.display = "block";
+
+  const setup = pr.setup || {};
+  const page = pr.page || {};
+  const scroll = pr.scroll_log || {};
+  const findings = pr.findings || {};
+  const found = findings.found || {};
+  const errors = pr.errors || {};
+  const runLog = pr.run_log || [];
+  const failedItems = (findings.failed_items || []);
+
+  const vp = setup.viewport || "";
+  const ua = setup.user_agent || "";
+  const isMobile = vp.startsWith("390") && ua.includes("iPhone");
+  const statusEl = isMobile
+    ? h("span", { class: "pw-status-ok" }, "✅ Mobile view confirmed")
+    : h("span", { class: "pw-status-bad" }, "❌ Not mobile");
+
+  const shots = [];
+  if (d.above_the_fold_url) {
+    shots.push(h("div", {},
+      h("img", { src: d.above_the_fold_url, alt: "Above the fold", loading: "lazy",
+                 onclick: () => openImageModal(d.above_the_fold_url, "above_the_fold.png", {}, "Viewport top", "") }),
+      h("div", { class: "pw-shot-label", text: "Above the fold" })
+    ));
+  }
+  if (d.page_mobile_url) {
+    shots.push(h("div", {},
+      h("img", { src: d.page_mobile_url, alt: "Full page mobile", loading: "lazy",
+                 onclick: () => openImageModal(d.page_mobile_url, "page_mobile.png", {}, "Full page", "") }),
+      h("div", { class: "pw-shot-label", text: "Full page (mobile)" })
+    ));
+  }
+  const shotsEl = shots.length ? h("div", { class: "pw-shots" }, ...shots) : null;
+
+  const setupRows = [
+    ["Browser", `${setup.browser_name || "chromium"} ${setup.browser_version || ""}`],
+    ["Device", setup.device_profile || "iPhone 14"],
+    ["Viewport", setup.viewport || "390x844"],
+    ["is_mobile / has_touch", `${setup.is_mobile} / ${setup.has_touch}`],
+    ["HTTP status", page.http_status ?? "—"],
+    ["Page load", `${page.page_load_time_seconds ?? "—"}s`],
+    ["Final URL", page.final_url || "—"],
+    ["Page title", page.title || "—"],
+    ["Total height", page.total_page_height_px ? `${page.total_page_height_px}px` : "—"],
+    ["Cookie banner dismissed", errors.cookie_banner_dismissed ? "Yes" : "No"],
+  ];
+  const setupTable = h("table", { class: "pw-kv-table" },
+    ...setupRows.map(([k, v]) => h("tr", {}, h("td", { text: k }), h("td", { text: String(v) })))
+  );
+
+  const findRows = [
+    ["Images", found.images ?? 0],
+    ["Background images", found.background_images ?? 0],
+    ["GIFs", found.gifs ?? 0],
+    ["SVGs", found.svgs ?? 0],
+    ["Videos", found.videos ?? 0],
+    ["Embeds", found.embeds ?? 0],
+    ["Downloaded", findings.downloaded ?? 0],
+    ["Skipped (< 5 KB)", findings.skipped_too_small ?? 0],
+    ["Failed", findings.failed ?? 0],
+  ];
+  const findTable = h("table", { class: "pw-kv-table" },
+    ...findRows.map(([k, v]) => h("tr", {}, h("td", { text: k }), h("td", { text: String(v) })))
+  );
+
+  const logLines = runLog.map((s) => `[${String(s.t).padStart(6)}s] ${s.msg}`).join("\n");
+  const logEl = h("details", { class: "pw-details" },
+    h("summary", { text: `Run log (${runLog.length} steps)` }),
+    h("pre", { class: "pw-runlog", text: logLines || "(empty)" })
+  );
+
+  fill(card,
+    h("h3", {}, "🎭 Playwright Result ", statusEl),
+    shotsEl,
+    h("div", { class: "pw-section-title", text: "Setup & Page" }), setupTable,
+    h("div", { class: "pw-section-title", text: "Findings" }), findTable,
+    logEl
+  );
+}
+
+function openImageModal(src, filename, dimensions, section, size) {
+  const modal = $("mediaModal");
+  const container = $("modalMediaContainer");
+  const caption = $("modalInfo");
+  fill(container, h("img", { src: src, alt: filename || "" }));
+  const dims = dimensions && dimensions.width ? `${dimensions.width}×${dimensions.height} px` : "";
+  fill(caption,
+    h("span", { style: "font-weight:600;", text: filename || "" }),
+    dims ? h("span", { class: "src", text: dims }) : null,
+    size ? h("span", { class: "src", text: size }) : null,
+    section ? h("span", { class: "muted", text: "📌 " + section }) : null
+  );
+  modal.style.display = "flex";
+}
+
+function closeMediaModal() {
+  const modal = $("mediaModal");
+  const container = $("modalMediaContainer");
+  fill(container);
+  modal.style.display = "none";
+}
+
+function renderSite(d) {
+  const box = $("site");
+  const s = d.site;
+  if (!s) { fill(box, h("div", { class: "empty", text: "No site_data.json yet." })); return; }
+  const url = safeUrl(s.final_url || s.url);
+  const kids = [];
+  kids.push(url ? h("a", { class: "site-title", href: url, target: "_blank", rel: "noopener", text: s.title || url })
+                : h("div", { class: "site-title", text: s.title || "(no title)" }));
+  kids.push(h("p", { class: "desc", text: s.description || "No meta description on this page." }));
+  kids.push(s.hero_url ? h("a", { href: s.hero_url, target: "_blank" }, h("img", { class: "hero", src: s.hero_url, alt: "Hero screenshot", loading: "lazy" }))
+                       : h("div", { class: "empty", text: "No hero screenshot." }));
+  const videos = Array.isArray(s.videos) ? s.videos : [], embeds = Array.isArray(s.embeds) ? s.embeds : [];
+  const images = Array.isArray(s.images) ? s.images : [];
+  kids.push(h("div", { class: "stats" },
+    h("span", { class: "stat" }, h("b", { text: videos.length }), " videos"),
+    h("span", { class: "stat" }, h("b", { text: embeds.length }), " embeds"),
+    h("span", { class: "stat" }, h("b", { text: images.length }), " images")));
+
+  const sections = Array.isArray(s.sections) ? s.sections : [];
+  if (sections.length) {
+    kids.push(h("div", { class: "sub", text: `Page Sections (${sections.length})` }));
+    kids.push(h("ul", { class: "plain" }, sections.slice(0, 6).map((sec) => 
+      h("li", { class: "feat" }, h("b", { text: sec.heading }), sec.text ? h("span", { text: sec.text }) : null)
+    )));
+  }
+  fill(box, ...kids);
+}
+
+function renderScript(d) {
+  const box = $("scriptBox");
+  $("copyBtn").disabled = !d.script;
+  fill(box, d.script ? h("pre", { id: "script", text: d.script })
+                     : h("div", { class: "empty", text: "No script yet. Use Step 2 above to auto-build, paste, or generate." }));
+}
+
+$("copyBtn").addEventListener("click", async () => {
+  const text = state.data && state.data.script;
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const ta = h("textarea", {}); ta.value = text; document.body.append(ta); ta.select();
+    try { document.execCommand("copy"); } catch (e2) {} ta.remove();
+  }
+  toast("Script copied");
+});
+
+const BADGE = { covered: "covered", missing: "missing", needs_manual: "needs manual" };
+
+function clipCell(r) {
+  if (!r.clip) return h("div", { class: "clipbox" }, h("div", { class: "none", text: "no clip" }));
+  const v = h("video", { src: r.clip + "#t=0.5", muted: true, loop: true, playsinline: true, preload: "metadata", "aria-label": `Shot ${r.shot} clip` });
+  v.muted = true;
+  const play = () => { const p = v.play(); if (p) p.catch(() => {}); };
+  v.addEventListener("mouseenter", play);
+  v.addEventListener("mouseleave", () => v.pause());
+  v.addEventListener("click", () => (v.paused ? play() : v.pause()));
+  return h("div", { class: "clipbox" }, v, h("span", { class: "hint", text: r.manual ? "manual" : "hover to play" }));
+}
+
+function renderShots(d) {
+  const box = $("shots");
+  $("shotNote").textContent = d.has_manifest ? "Hover a clip to play it" : "No manifest.json yet";
+  if (!d.shots.length) { fill(box, h("div", { class: "empty", text: "No shot list yet. Complete Step 1 & Step 2 above." })); return; }
+  const canUpload = !d.running;
+  const rows = d.shots.map((r) => {
+    const label = r.badge === "covered" ? "Replace clip" : "Upload clip";
+    const btn = h("button", { class: "btn small" + (r.badge === "covered" ? " ghost" : ""), type: "button", text: label,
+                              disabled: !canUpload, title: canUpload ? `Saved as clips/shot${String(r.shot).padStart(2, "0")}_manual.mp4` : "Run in progress",
+                              onclick: () => pickFile(r.shot) });
+    const scoreText = (r.match_score != null && r.match_score > 0) ? `${Math.round(r.match_score * 100)}%` : "—";
+    return h("tr", { "data-shot": r.shot },
+      h("td", { class: "num", text: r.shot }),
+      h("td", { class: "line", "data-label": "Script line", text: r.script_line || "—" }),
+      h("td", { class: "visual", "data-label": "Visual needed", text: r.visual_needed || "—" }),
+      h("td", { "data-label": "Source" }, h("span", { class: "src", text: r.source })),
+      h("td", { class: "clip" }, clipCell(r)),
+      h("td", { "data-label": "Score", class: "score" }, h("span", { class: "tag", text: scoreText })),
+      h("td", { "data-label": "Status" }, h("span", { class: "badge " + r.badge, text: BADGE[r.badge] || r.badge }),
+        h("div", { class: "rowactions" }, btn, h("span", { class: "progress", id: `prog${r.shot}` }))),
+      h("td", { class: "reason", "data-label": "Reason", text: r.reason || (r.badge === "covered" ? "" : "—") }),
+    );
+  });
+  fill(box, h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, ["#", "Script line", "Visual needed", "Source", "Clip", "Score", "Status", "Reason"].map((t) => h("th", { text: t })))),
+    h("tbody", {}, rows))));
+}
+
+function pickFile(shot) {
+  state.uploadShot = shot;
+  const fi = $("fileInput");
+  fi.value = "";
+  fi.click();
+}
+$("fileInput").addEventListener("change", (e) => {
+  const file = e.target.files[0], shot = state.uploadShot, slug = state.slug;
+  if (!file || shot == null || !slug) return;
+  const prog = $(`prog${shot}`);
+  const row = document.querySelector(`tr[data-shot="${shot}"]`);
+  row && row.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  const fd = new FormData();
+  fd.append("file", file);
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `/api/tool/${encodeURIComponent(slug)}/shot/${shot}/upload`);
+  xhr.upload.onprogress = (ev) => {
+    if (!prog || !ev.lengthComputable) return;
+    const pct = Math.round((ev.loaded / ev.total) * 100);
+    prog.textContent = pct < 100 ? `Uploading ${pct}%` : "Converting to 1080x1920…";
+  };
+  xhr.onload = () => {
+    let body = null;
+    try { body = JSON.parse(xhr.responseText); } catch (err) {}
+    if (xhr.status >= 200 && xhr.status < 300) {
+      toast(`Shot ${shot} saved` + (body && body.qa_notes && body.qa_notes.length ? " (with QA notes)" : ""));
+      openTool(slug);
+    } else {
+      if (prog) { prog.textContent = ""; prog.after(h("span", { class: "upload-error", text: (body && body.error) || `Upload failed (${xhr.status})` })); }
+      row && row.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    }
+  };
+  xhr.onerror = () => { if (prog) prog.textContent = "Upload failed (network)"; row && row.querySelectorAll("button").forEach((b) => (b.disabled = false)); };
+  if (prog) prog.textContent = "Uploading 0%";
+  xhr.send(fd);
+});
+
+// ---------- start ----------
+(async () => {
+  await checkConfig();
+  const r = await refreshTools();
+  const fromHash = decodeURIComponent(location.hash.slice(1));
+  const running = r && Object.entries(r.running)[0];
+  if (running) attachJob(running[1], running[0]);
+  const slug = (fromHash && r && r.tools.some((t) => t.slug === fromHash)) ? fromHash
+             : running ? running[0] : store.get("lastTool");
+  if (slug && r && r.tools.some((t) => t.slug === slug)) openTool(slug);
+})();
+</script>
+</body>
+</html>

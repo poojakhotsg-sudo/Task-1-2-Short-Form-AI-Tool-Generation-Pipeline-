@@ -1,0 +1,13 @@
+# secrets and auth - never commit
+.env
+auth_*.json
+credentials.json
+token.json
+
+# generated media
+out/
+
+__pycache__/
+*.pyc
+.venv/
+venv/
