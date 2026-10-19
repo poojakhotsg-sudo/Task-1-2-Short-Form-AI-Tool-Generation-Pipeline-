@@ -6,7 +6,7 @@ anthropic
 requests
 google-api-python-client
 google-auth-oauthlib
-opencv-python
+opencv-python-headless
 ffmpeg-python
 yt-dlp
 python-dotenv

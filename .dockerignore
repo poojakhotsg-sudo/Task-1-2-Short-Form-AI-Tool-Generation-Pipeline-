@@ -1,0 +1,13 @@
+.git
+.env
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+out/
+.DS_Store
+auth_*.json
+token.json
+credentials.json

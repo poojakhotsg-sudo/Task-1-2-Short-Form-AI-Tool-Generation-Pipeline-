@@ -734,7 +734,7 @@ def assemble_cut(slug: str):
 
 @app.get("/")
 def index():
-    return FileResponse(ROOT / "web" / "index.html", media_type="text/html; charset=utf-8")
+    return FileResponse(ROOT / "web" / "pipeline.html", media_type="text/html; charset=utf-8")
 
 
 @app.get("/pipeline")
@@ -742,7 +742,19 @@ def pipeline_page():
     return FileResponse(ROOT / "web" / "pipeline.html", media_type="text/html; charset=utf-8")
 
 
+@app.get("/extractor")
+def extractor_page():
+    return FileResponse(ROOT / "web" / "index.html", media_type="text/html; charset=utf-8")
+
+
 @app.exception_handler(HTTPException)
 def http_error(_, exc):
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
+
 
