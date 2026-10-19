@@ -1,0 +1,1069 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reel Pipeline</title>
+<style>
+  :root {
+    --bg: #f5f5f2; --panel: #fff; --fg: #1c1c1a; --muted: #6b6b66; --line: #e3e3de; --soft: #f0f0ec;
+    --accent: #1c1c1a; --accent-fg: #fff;
+    --ok: #1a7f37; --ok-bg: #dcf5e3; --bad: #b42318; --bad-bg: #fde7e4; --warn: #8a5a00; --warn-bg: #fff1c2;
+    --log-bg: #141413; --log-fg: #e6e6e1;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121211; --panel: #1b1b19; --fg: #ececE6; --muted: #9a9a92; --line: #2d2d2a; --soft: #232320;
+      --accent: #ececE6; --accent-fg: #121211;
+      --ok: #5fd38a; --ok-bg: #173723; --bad: #ff8f80; --bad-bg: #3d1a16; --warn: #f5c451; --warn-bg: #3a2f10;
+      --log-bg: #0b0b0a;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: inherit; }
+  button, input, select { font: inherit; color: inherit; }
+  .wrap { max-width: 1440px; margin: 0 auto; padding: 0 16px; }
+
+  /* top bar */
+  .topbar { position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .topbar .wrap { display: flex; gap: 10px; align-items: center; padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; }
+  .brand { font-weight: 700; margin-right: 6px; white-space: nowrap; }
+  #runForm { display: flex; gap: 8px; flex: 1 1 560px; min-width: 0; }
+  input, select { padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); min-width: 0; }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+  #tool { flex: 1 1 160px; } #url { flex: 2 1 260px; } #num { width: 70px; flex: 0 0 70px; }
+  .pick { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 14px; }
+  .pick select { max-width: 200px; color: var(--fg); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--accent);
+         background: var(--accent); color: var(--accent-fg); cursor: pointer; text-decoration: none; white-space: nowrap; font-size: 14px; }
+  .btn.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
+  .btn.small { padding: 5px 10px; font-size: 13px; }
+  .btn:disabled { opacity: .5; cursor: default; }
+
+  main.wrap { padding-top: 18px; padding-bottom: 48px; }
+  .panel { min-width: 0; overflow-wrap: anywhere; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .panel h2 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; gap: 10px; }
+  .panel h2 .spacer { flex: 1; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); padding: 14px; background: var(--soft); border-radius: 9px; font-size: 14px; }
+  .error-bar { background: var(--bad-bg); color: var(--bad); padding: 10px 14px; border-radius: 9px; margin-bottom: 14px; }
+
+  /* log */
+  #logPanel { margin-bottom: 18px; }
+  .status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 14px; margin-bottom: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: 0 0 10px; }
+  .dot.running, .dot.stopping { background: #2f81f7; animation: pulse 1s infinite alternate; }
+  .dot.done { background: var(--ok); } .dot.failed, .dot.stopped { background: var(--bad); }
+  @keyframes pulse { to { opacity: .35; } }
+  #log { background: var(--log-bg); color: var(--log-fg); border-radius: 9px; padding: 12px; margin: 0; max-height: 300px;
+         overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.5 ui-monospace, Consolas, monospace; }
+
+  /* results header */
+  .head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .head h1 { font-size: 22px; margin: 0; }
+  .head .summary { font-weight: 600; }
+  .head .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  .counts { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  /* layout */
+  .cols { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+  .left { display: grid; gap: 18px; min-width: 0; }
+  .right { min-width: 0; }
+  @media (min-width: 1100px) { .cols { grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); } .left { position: sticky; top: 84px; } }
+
+  /* website data */
+  .hero { width: 100%; border-radius: 9px; border: 1px solid var(--line); display: block; margin: 4px 0 12px; }
+  .site-title { font-weight: 600; font-size: 16px; text-decoration: none; }
+  .site-title:hover { text-decoration: underline; }
+  .desc { margin: 4px 0 10px; color: var(--muted); font-size: 14px; }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .stat { background: var(--soft); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+  .stat b { font-size: 15px; }
+  .sub { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px; }
+  ul.plain { list-style: none; padding: 0; margin: 0; font-size: 14px; }
+  ul.plain li { padding: 5px 0; border-bottom: 1px solid var(--line); }
+  ul.plain li:last-child { border-bottom: 0; }
+  .tag { font-size: 11px; font-weight: 700; color: var(--muted); margin-right: 6px; }
+  .feat b { display: block; font-weight: 600; }
+  .feat span { color: var(--muted); font-size: 13px; }
+  .links a { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 0; }
+  details summary { cursor: pointer; font-size: 14px; color: var(--muted); margin-top: 10px; }
+
+  /* script */
+  #script { white-space: pre-wrap; background: var(--soft); border-radius: 9px; padding: 14px; margin: 0;
+            font: 14px/1.6 ui-monospace, Consolas, monospace; max-height: 520px; overflow: auto; }
+
+  /* shot table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+       font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.num { font-weight: 700; font-size: 16px; width: 36px; }
+  td.line { min-width: 160px; }
+  td.visual { min-width: 150px; color: var(--muted); }
+  td.reason { min-width: 120px; font-size: 13px; color: var(--muted); }
+  .clipbox { width: 160px; aspect-ratio: 9 / 16; border-radius: 8px; overflow: hidden; background: #000; position: relative; }
+  .clipbox video { width: 100%; height: 100%; object-fit: cover; display: block; cursor: pointer; }
+  .clipbox .none { position: absolute; inset: 0; display: grid; place-items: center; color: #888; font-size: 12px;
+                   background: repeating-linear-gradient(45deg, var(--soft), var(--soft) 8px, var(--panel) 8px, var(--panel) 16px); }
+  .clipbox .hint { position: absolute; left: 6px; bottom: 6px; font-size: 11px; color: #fff; background: rgba(0,0,0,.55);
+                   padding: 1px 6px; border-radius: 6px; pointer-events: none; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .badge.covered { background: var(--ok-bg); color: var(--ok); }
+  .badge.missing { background: var(--bad-bg); color: var(--bad); }
+  .badge.needs_manual { background: var(--warn-bg); color: var(--warn); }
+  .src { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--soft); white-space: nowrap; }
+  .rowactions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-top: 8px; }
+  .progress { font-size: 12px; color: var(--muted); }
+  .upload-error { font-size: 12px; color: var(--bad); }
+  td.score .tag { font-size: 12px; font-weight: 600; background: var(--soft); padding: 3px 8px; border-radius: 6px; color: var(--fg); }
+
+  /* table -> cards on narrow screens */
+  @media (max-width: 760px) {
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tr { display: grid; grid-template-columns: 120px 1fr; gap: 4px 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    tr:last-child { border-bottom: 0; }
+    td { border: 0; padding: 0; min-width: 0 !important; }
+    td.num { grid-column: 1 / -1; }
+    td.clip { grid-column: 1; grid-row: 2 / span 5; }
+    .clipbox { width: 120px; }
+    td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; text-transform: uppercase;
+                             letter-spacing: .04em; color: var(--muted); }
+    #runForm { flex-wrap: wrap; } #tool, #url { flex: 1 1 100%; } #num { flex: 1 1 auto; }
+    .topbar { position: static; }
+    td.reason:empty { display: none; }
+  }
+
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg);
+           padding: 9px 16px; border-radius: 9px; font-size: 14px; z-index: 20; }
+
+  /* Extract Assets Panel & Gallery */
+  .tab-btn {
+    border-radius: 99px; padding: 5px 12px; font-size: 13px; font-weight: 500;
+    background: transparent; color: var(--muted); border: 1px solid var(--line); cursor: pointer;
+  }
+  .tab-btn:hover { color: var(--fg); border-color: var(--fg); }
+  .tab-btn.active { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .asset-card-ui {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    display: flex; flex-direction: column; overflow: hidden; transition: transform 0.15s, border-color 0.15s;
+  }
+  .asset-card-ui:hover { transform: translateY(-2px); border-color: var(--accent); }
+  .asset-thumb-box {
+    height: 150px; background: #000; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .asset-thumb-box img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
+  .asset-thumb-box video { width: 100%; height: 100%; object-fit: contain; cursor: pointer; }
+  .asset-info-ui { padding: 10px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .failed-box {
+    margin-top: 16px; padding: 12px 14px; background: var(--bad-bg); border-radius: 9px;
+    border: 1px solid var(--bad); color: var(--bad); font-size: 13px;
+  }
+  .failed-box ul { margin: 6px 0 0; padding-left: 18px; word-break: break-all; }
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100;
+    display: flex; align-items: center; justify-content: center; flex-direction: column; padding: 20px;
+  }
+  .modal-overlay img, .modal-overlay video {
+    max-width: 90vw; max-height: 80vh; object-fit: contain; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.7);
+  }
+  .modal-close {
+    position: absolute; top: 16px; right: 20px; font-size: 28px; color: #fff; cursor: pointer; background: transparent; border: none;
+  }
+  .modal-caption {
+    margin-top: 12px; color: #fff; font-size: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center;
+  }
+
+  /* Media gallery tabs */
+  .g-tabs { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:14px 0 10px; }
+  .tab-btn.empty-tab { opacity:.45; }
+  .tab-btn.empty-tab.active { opacity:.7; }
+  .g-tools { display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; padding:10px 0 12px; margin-bottom:14px;
+             border-bottom:1px solid var(--line); font-size:13px; }
+  .g-tools input[type=search] { flex:1 1 200px; max-width:320px; padding:6px 10px; font-size:13px; }
+  .g-tools select { padding:6px 8px; font-size:13px; }
+  .g-tools label { display:flex; align-items:center; gap:6px; color:var(--muted); cursor:pointer; white-space:nowrap; }
+  .g-tools .spacer { flex:1; }
+  .g-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:14px; }
+  .g-grid.compact { grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); }
+  .g-card { background:var(--panel); border:1px solid var(--line); border-radius:9px; overflow:hidden; display:flex; flex-direction:column; min-width:0; }
+  .g-card.selected { border-color:var(--fg); box-shadow:0 0 0 1px var(--fg); }
+  .g-thumb { position:relative; aspect-ratio:4/3; background:#000; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  .g-thumb.light { background:repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0/16px 16px; }
+  .g-thumb img, .g-thumb video, .g-thumb canvas { width:100%; height:100%; object-fit:contain; display:block; }
+  .g-thumb.zoom { cursor:zoom-in; }
+  .g-play { position:absolute; inset:0; margin:auto; width:46px; height:46px; border-radius:50%; border:0; cursor:pointer;
+            background:rgba(0,0,0,.6); color:#fff; font-size:18px; display:grid; place-items:center; }
+  .g-badge { position:absolute; top:6px; left:6px; font-size:11px; font-weight:700; padding:2px 7px; border-radius:6px;
+             background:rgba(0,0,0,.65); color:#fff; pointer-events:none; }
+  .g-badge.right { left:auto; right:6px; }
+  .g-badge.ok { background:var(--ok); } .g-badge.warn { background:#8a5a00; }
+  .g-check { position:absolute; bottom:6px; left:6px; width:18px; height:18px; cursor:pointer; accent-color:var(--fg); }
+  .g-info { padding:8px 10px 10px; font-size:12px; display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .g-name { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .g-sec { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .g-meta { display:flex; gap:5px; flex-wrap:wrap; }
+  .g-meta span { background:var(--soft); border-radius:5px; padding:1px 6px; }
+  .g-empty { grid-column:1/-1; color:var(--muted); padding:28px 14px; text-align:center; background:var(--soft); border-radius:9px; }
+</style>
+</head>
+<body>
+<div id="staticHostBanner" style="display:none;background:#fef3c7;color:#92400e;border-bottom:1px solid #f59e0b;padding:10px 16px;text-align:center;font-size:13.5px;font-weight:500;">
+  ⚠️ <strong>GitHub Pages Static Host</strong>: The UI frontend is displayed, but backend AI pipeline execution (Playwright, FFmpeg, script generation) requires a running Python FastAPI backend (e.g., hosted on Render/Railway or run locally via <code>python app.py</code>).
+</div>
+<header class="topbar">
+  <div class="wrap">
+    <span class="brand">Reel Pipeline</span>
+    <a href="/extractor" class="btn ghost small" style="text-decoration:none;margin-right:6px;" title="Open standalone Asset Extractor">Extractor</a>
+    <form id="runForm" autocomplete="off">
+      <input id="tool" name="tool" placeholder="Tool name, e.g. Pomelli" required maxlength="60" aria-label="Tool name">
+      <input id="url" name="url" placeholder="Website, e.g. https://labs.google.com/pomelli" required aria-label="Website URL">
+      <input id="num" name="num" placeholder="No." inputmode="numeric" pattern="\d{1,3}" title="Optional Drive folder number, e.g. 01" aria-label="Drive folder number (optional)">
+      <button class="btn" id="runBtn" type="submit">Run Pipeline</button>
+      <button class="btn ghost" id="extractBtn" type="button" style="border-color: #3b82f6; color: #60a5fa;" title="Extract all untouched images, videos, GIFs and embeds using mobile Playwright">Extract Assets</button>
+    </form>
+    <label class="pick">Earlier runs
+      <select id="picker" aria-label="Open an earlier run"><option value="">Choose a tool…</option></select>
+    </label>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="formError" class="error-bar" hidden></div>
+
+  <section id="logPanel" class="panel" hidden>
+    <div class="status">
+      <span id="dot" class="dot"></span>
+      <b id="logTool"></b>
+      <span id="logState" class="muted"></span>
+      <span style="flex:1"></span>
+      <button id="stopBtn" class="btn ghost small" type="button">Stop</button>
+      <button id="hideLog" class="btn ghost small" type="button">Hide log</button>
+    </div>
+    <pre id="log"></pre>
+  </section>
+
+  <!-- Extract Assets Panel -->
+  <section class="panel" id="extractAssetsPanel" style="margin-bottom: 18px;">
+    <h2>
+      Extract Assets
+      <span class="spacer"></span>
+      <span id="assetStatusBadge" class="muted" style="font-weight:400;font-size:13px;"></span>
+    </h2>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center;">
+      <input id="assetTool" placeholder="Tool name, e.g. Pomelli" style="flex: 1 1 180px;" aria-label="Tool name for extraction">
+      <input id="assetUrl" placeholder="Website URL, e.g. https://labs.google.com/pomelli" style="flex: 2 1 280px;" aria-label="Website URL for extraction">
+      <button class="btn" id="runExtractBtn" type="button">Run extraction</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer;" title="Open a real browser window while extracting">
+        <input type="checkbox" id="assetHeaded" style="width:14px;height:14px;"> Show browser
+      </label>
+    </div>
+
+    <!-- Live progress indicator -->
+    <div id="assetProgressBox" style="margin-top: 10px; margin-bottom: 12px; padding: 12px 14px; background: var(--soft); border-radius: 9px; display: flex; flex-direction: column; gap: 8px;" hidden>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span style="display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600;">
+          <span id="assetProgressDot" class="dot running"></span>
+          <span id="assetProgressText">Starting extraction...</span>
+        </span>
+        <span id="assetProgressElapsed" class="muted" style="font-size:12px;">0:00</span>
+      </div>
+      <div style="width: 100%; height: 6px; background: var(--line); border-radius: 99px; overflow: hidden;">
+        <div id="assetProgressBar" style="width: 5%; height: 100%; background: #3b82f6; transition: width 0.3s;"></div>
+      </div>
+    </div>
+
+    <!-- Gallery inside the UI -->
+    <div id="assetGalleryUI" hidden>
+      <div class="g-tabs" role="tablist" aria-label="Media type">
+        <button class="tab-btn" data-tab="video" type="button" role="tab">Videos (<span data-count="video">0</span>)</button>
+        <button class="tab-btn" data-tab="gif" type="button" role="tab">GIFs (<span data-count="gif">0</span>)</button>
+        <button class="tab-btn" data-tab="image" type="button" role="tab">Images (<span data-count="image">0</span>)</button>
+        <button class="tab-btn" data-tab="embed" type="button" role="tab">Embeds (<span data-count="embed">0</span>)</button>
+        <button class="tab-btn" data-tab="svg" type="button" role="tab">SVGs (<span data-count="svg">0</span>)</button>
+        <button class="tab-btn" data-tab="all" type="button" role="tab">All (<span data-count="all">0</span>)</button>
+        <span class="spacer"></span>
+        <span id="galleryStats" class="muted" style="font-size:13px;"></span>
+        <a id="openGalleryBtn" class="btn ghost small" href="#" target="_blank" rel="noopener">Open standalone gallery ↗</a>
+      </div>
+      <div class="g-tools">
+        <input id="gSearch" type="search" placeholder="Search file name" aria-label="Search file name">
+        <select id="gSort" aria-label="Sort">
+          <option value="page">Page order</option>
+          <option value="largest">Largest first</option>
+          <option value="newest">Newest</option>
+        </select>
+        <label title="Hide people photos (testimonials, avatars), decorative backgrounds and icons"><input type="checkbox" id="gUseful" checked> Likely useful</label>
+        <label id="gSmallWrap"><input type="checkbox" id="gHideSmall"> Hide small (&lt; 20 KB)</label>
+        <span class="spacer"></span>
+        <label><input type="checkbox" id="gSelectAll"> Select all</label>
+        <button class="btn small" id="gDownload" type="button" disabled>Download selected</button>
+      </div>
+
+      <div id="assetGridUI" class="g-grid"></div>
+
+      <!-- Failed downloads list below grid -->
+      <div id="failedBox" class="failed-box" hidden>
+        <div style="font-weight: 700; margin-bottom: 6px;">⚠️ Failed Downloads (<span id="failedCount">0</span>)</div>
+        <ul id="failedList" style="margin:0; padding-left:18px;"></ul>
+      </div>
+    </div>
+  </section>
+
+  <div id="intro" class="empty">Enter a tool name and its website, then press Run Pipeline or Run extraction. Or pick an earlier run from the dropdown.</div>
+
+  <section id="results" hidden>
+    <div class="head">
+      <h1 id="rTool"></h1>
+      <span class="summary" id="rSummary"></span>
+      <span class="counts" id="rCounts"></span>
+      <span class="actions" id="rActions"></span>
+    </div>
+
+    <div class="cols">
+      <div class="left">
+        <section class="panel" id="sitePanel"><h2>Website data</h2><div id="site"></div></section>
+        <section class="panel">
+          <h2>Script <span class="spacer"></span><button class="btn ghost small" id="copyBtn" type="button">Copy</button></h2>
+          <div id="scriptBox"></div>
+        </section>
+      </div>
+      <div class="right">
+        <section class="panel">
+          <h2>Shot list <span class="spacer"></span><span class="muted" id="shotNote" style="font-weight:400;font-size:13px"></span></h2>
+          <div id="shots"></div>
+        </section>
+      </div>
+    </div>
+  </section>
+</main>
+
+<input type="file" id="fileInput" accept="video/*,.mp4,.mov,.webm,.m4v" hidden>
+
+<!-- Media Modal (enlarge images & play videos) -->
+<div id="mediaModal" class="modal-overlay" style="display:none;" onclick="closeMediaModal()">
+  <button class="modal-close" type="button" onclick="closeMediaModal()" aria-label="Close modal">&times;</button>
+  <div id="modalMediaContainer" onclick="event.stopPropagation()"></div>
+  <div id="modalInfo" class="modal-caption" onclick="event.stopPropagation()"></div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const state = { job: null, since: 0, slug: null, data: null, uploadShot: null };
+
+// DOM helper: text is always set with textContent, never parsed as HTML.
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "text") el.textContent = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+// replaceChildren() would turn null into the text "null"; drop empties first.
+function fill(el, ...kids) { el.replaceChildren(...kids.flat().filter((k) => k != null && k !== false)); return el; }
+const safeUrl = (u) => (typeof u === "string" && /^https?:\/\//i.test(u)) ? u : null;
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
+function toast(msg) {
+  const t = h("div", { class: "toast", text: msg, role: "status" });
+  document.body.append(t);
+  setTimeout(() => t.remove(), 2200);
+}
+if (window.location.hostname.includes("github.io") || window.location.protocol === "file:") {
+  const b = $("staticHostBanner");
+  if (b) b.style.display = "block";
+}
+
+async function api(path, opts) {
+  try {
+    const res = await fetch(path, opts);
+    let body = null;
+    try { body = await res.json(); } catch (e) {}
+    if (!res.ok) {
+      if (res.status === 404 && (window.location.hostname.includes("github.io") || window.location.protocol === "file:")) {
+        throw new Error("Backend server is not running on GitHub Pages (static host). Deploy to Render/Railway or run 'python app.py' locally.");
+      }
+      throw new Error((body && body.error) || `Request failed (${res.status})`);
+    }
+    return body;
+  } catch (err) {
+    if (window.location.hostname.includes("github.io") || window.location.protocol === "file:") {
+      throw new Error("Backend server is not reachable on GitHub Pages. Run 'python app.py' locally or deploy on Render/Railway.");
+    }
+    throw err;
+  }
+}
+
+// ---------- tools dropdown ----------
+async function refreshTools(select) {
+  let r;
+  try { r = await api("/api/tools"); } catch (e) { return; }
+  const picker = $("picker");
+  const current = select || picker.value;
+  fill(picker, h("option", { value: "", text: r.tools.length ? "Choose a toolâ€¦" : "No runs yet" }));
+  for (const t of r.tools) picker.append(h("option", { value: t.slug, text: t.slug + (r.running[t.slug] ? " (running)" : "") }));
+  if (current && r.tools.some((t) => t.slug === current)) picker.value = current;
+  return r;
+}
+$("picker").addEventListener("change", (e) => { if (e.target.value) openTool(e.target.value); });
+
+// ---------- run + live log ----------
+$("runForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("formError").hidden = true;
+  const fd = new FormData(e.target);
+  $("runBtn").disabled = true;
+  $("extractBtn").disabled = true;
+  try {
+    const r = await api("/api/run", { method: "POST", body: fd });
+    if (r.already_running) toast("Already running; showing that run");
+    attachJob(r.job, fd.get("tool"));
+    refreshTools(r.slug);
+  } catch (err) {
+    $("formError").textContent = err.message;
+    $("formError").hidden = false;
+  } finally {
+    $("runBtn").disabled = false;
+    $("extractBtn").disabled = false;
+  }
+});
+
+// Sync inputs between topbar and extract panel
+$("tool").addEventListener("input", (e) => { $("assetTool").value = e.target.value; });
+$("url").addEventListener("input", (e) => { $("assetUrl").value = e.target.value; });
+$("assetTool").addEventListener("input", (e) => { $("tool").value = e.target.value; });
+$("assetUrl").addEventListener("input", (e) => { $("url").value = e.target.value; });
+
+async function runExtractionHandler() {
+  location.href = "/";  // extraction lives on the main page now
+  return;
+  $("formError").hidden = true;
+  const tool = ($("assetTool").value || $("tool").value).trim();
+  const url = ($("assetUrl").value || $("url").value).trim();
+  if (!tool) {
+    $("formError").textContent = "Please enter a tool name.";
+    $("formError").hidden = false;
+    $("assetTool").focus();
+    return;
+  }
+  if (!url) {
+    $("formError").textContent = "Please enter a website URL.";
+    $("formError").hidden = false;
+    $("assetUrl").focus();
+    return;
+  }
+
+  $("runExtractBtn").disabled = true;
+  $("extractBtn").disabled = true;
+  $("assetProgressBox").hidden = false;
+  $("assetProgressText").textContent = "Navigating to website...";
+  $("assetProgressElapsed").textContent = "0:00";
+  $("assetProgressBar").style.width = "10%";
+  $("assetStatusBadge").textContent = "Extraction in progress...";
+
+  try {
+    const fd = new FormData();
+    fd.append("tool", tool);
+    fd.append("url", url);
+    fd.append("headed", $("assetHeaded").checked ? "1" : "0");
+    const r = await api("/api/extract-assets", { method: "POST", body: fd });
+    if (r.already_running) toast("Extraction already in progress for this tool");
+    attachAssetJob(r.job, tool, r.slug);
+    refreshTools(r.slug);
+  } catch (err) {
+    $("formError").textContent = err.message;
+    $("formError").hidden = false;
+    $("assetProgressBox").hidden = true;
+    $("runExtractBtn").disabled = false;
+    $("extractBtn").disabled = false;
+  }
+}
+
+$("runExtractBtn").addEventListener("click", runExtractionHandler);
+$("extractBtn").addEventListener("click", runExtractionHandler);
+
+function attachAssetJob(jobId, toolName, slug) {
+  state.job = jobId;
+  state.since = 0;
+  store.set("lastJob", jobId);
+
+  const poll = async () => {
+    let r;
+    try {
+      r = await api(`/api/job/${jobId}?since=${state.since}`);
+    } catch (e) {
+      if (/isn't known/.test(e.message)) {
+        $("assetProgressText").textContent = e.message;
+        $("runExtractBtn").disabled = false;
+        $("extractBtn").disabled = false;
+        return;
+      }
+      setTimeout(poll, 1500);
+      return;
+    }
+
+    if (r.lines && r.lines.length) {
+      state.since = r.next;
+    }
+
+    $("assetProgressElapsed").textContent = r.elapsed || "0:00";
+    if (r.stage) {
+      $("assetProgressText").textContent = r.stage;
+      const m = r.stage.match(/(\d+)\/(\d+)\s+files/);
+      if (m) {
+        const cur = parseInt(m[1], 10), tot = parseInt(m[2], 10);
+        if (tot > 0) {
+          const pct = Math.min(95, Math.round((cur / tot) * 80) + 15);
+          $("assetProgressBar").style.width = `${pct}%`;
+        }
+      } else if (r.stage.includes("Scrolling")) {
+        $("assetProgressBar").style.width = "25%";
+      } else if (r.stage.includes("Extracting")) {
+        $("assetProgressBar").style.width = "40%";
+      }
+    }
+
+    if (r.status === "running" || r.status === "stopping") {
+      setTimeout(poll, 1000);
+      return;
+    }
+
+    $("assetProgressBar").style.width = "100%";
+    $("assetProgressText").textContent = r.status === "done" ? "Extraction complete!" : `Finished: ${r.status}`;
+    $("runExtractBtn").disabled = false;
+    $("extractBtn").disabled = false;
+    setTimeout(() => { $("assetProgressBox").hidden = true; }, 2500);
+
+    await refreshTools(r.slug);
+    openTool(r.slug);
+  };
+  poll();
+}
+
+function attachJob(jobId, toolName) {
+  state.job = jobId; state.since = 0;
+  $("log").textContent = "";
+  $("logTool").textContent = toolName || "";
+  $("logPanel").hidden = false;
+  $("stopBtn").hidden = false; $("stopBtn").disabled = false;
+  store.set("lastJob", jobId);
+  pollJob(jobId);
+}
+
+async function pollJob(jobId) {
+  if (state.job !== jobId) return;
+  let r;
+  try { r = await api(`/api/job/${jobId}?since=${state.since}`); }
+  catch (e) {
+    if (/isn't known/.test(e.message)) { $("logState").textContent = e.message; $("stopBtn").hidden = true; return; }
+    setTimeout(() => pollJob(jobId), 2000); return;
+  }
+  const log = $("log");
+  if (r.lines.length) {
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    log.textContent += (state.since ? "\n" : "") + r.lines.join("\n");
+    state.since = r.next;
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+  $("logTool").textContent = r.tool;
+  $("logState").textContent = `${r.status}${r.stage ? " · " + r.stage : ""} · ${r.elapsed}`;
+  $("dot").className = "dot " + r.status;
+  if (r.status === "running" || r.status === "stopping") { setTimeout(() => pollJob(jobId), 1000); return; }
+  $("stopBtn").hidden = true;
+  await refreshTools(r.slug);
+  openTool(r.slug);
+}
+
+$("stopBtn").addEventListener("click", async () => {
+  if (!state.job) return;
+  $("stopBtn").disabled = true;
+  try { await api(`/api/job/${state.job}/stop`, { method: "POST" }); } catch (e) { toast(e.message); }
+});
+$("hideLog").addEventListener("click", () => { $("logPanel").hidden = true; });
+
+// ---------- results ----------
+async function openTool(slug) {
+  state.slug = slug;
+  $("picker").value = slug;
+  if (location.hash !== "#" + slug) history.replaceState(null, "", "#" + slug);
+  store.set("lastTool", slug);
+  let d;
+  try { d = await api(`/api/tool/${encodeURIComponent(slug)}`); }
+  catch (e) { $("intro").hidden = false; $("intro").textContent = e.message; $("results").hidden = true; return; }
+  state.data = d;
+  $("intro").hidden = true;
+  $("results").hidden = false;
+
+  const toolName = d.tool || slug;
+  $("tool").value = toolName;
+  $("assetTool").value = toolName;
+  if (d.url) {
+    $("url").value = d.url;
+    $("assetUrl").value = d.url;
+  }
+
+  renderHead(d);
+  renderAssets(d);
+  renderSite(d);
+  renderScript(d);
+  renderShots(d);
+}
+
+function renderHead(d) {
+  $("rTool").textContent = d.tool;
+  const s = d.summary;
+  $("rSummary").textContent = s.total ? `${s.covered} of ${s.total} shots covered` : (d.assets_summary ? `${d.assets_summary.total} media assets extracted` : "No shots yet");
+  const countsKids = [];
+  if (s.missing) countsKids.push(h("span", { class: "badge missing", text: `${s.missing} missing` }));
+  if (s.needs_manual) countsKids.push(h("span", { class: "badge needs_manual", text: `${s.needs_manual} needs manual` }));
+  if (d.running) countsKids.push(h("span", { class: "badge", text: "run in progress" }));
+  if (d.assets_summary) countsKids.push(h("span", { class: "badge covered", text: `${d.assets_summary.total} assets (${d.assets_summary.size_human})` }));
+  fill($("rCounts"), ...countsKids);
+
+  const drive = safeUrl(d.drive);
+  fill($("rActions"), 
+    d.gallery_url ? h("a", { class: "btn", href: d.gallery_url, target: "_blank", rel: "noopener", text: "🖼️ View Standalone Gallery" }) : null,
+    drive ? h("a", { class: "btn", href: drive, target: "_blank", rel: "noopener", text: "Open Drive folder" }) : null,
+    d.rough_cut ? h("a", { class: "btn ghost", href: d.rough_cut, target: "_blank", text: "Rough cut" }) : null,
+    d.summary_md ? h("a", { class: "btn ghost", href: d.summary_md, target: "_blank", text: "summary.md" }) : null,
+    h("a", { class: "btn ghost", href: `/api/tool/${encodeURIComponent(d.slug)}/zip`, text: "Download folder as zip" }),
+  );
+}
+
+// ---------- media gallery ----------
+// Items come from gallery.py: every file is in exactly one tab (video | gif | image | embed | svg).
+const G = { items: [], tab: "all", selected: new Set(), slug: null };
+const TABS = ["video", "gif", "image", "embed", "svg"];
+const SMALL_BYTES = 20 * 1024;
+
+const fmtBytes = (n) => !n ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+const fmtDur = (s) => s == null ? "" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+const fmtDims = (it) => it.width && it.height ? `${it.width}×${it.height}` : "";
+
+function passesFilters(it) {
+  const q = $("gSearch").value.trim().toLowerCase();
+  if (q && !it.name.toLowerCase().includes(q)) return false;
+  if ($("gUseful").checked && it.flags.length) return false;
+  if ($("gHideSmall").checked && it.tab === "image" && it.size < SMALL_BYTES) return false;
+  return true;
+}
+
+function sorted(list) {
+  const how = $("gSort").value;
+  const pos = (it) => it.order ?? it.page_y ?? 1e9;
+  if (how === "largest") return list.sort((a, b) => b.size - a.size);
+  if (how === "newest") return list.sort((a, b) => b.mtime - a.mtime || pos(a) - pos(b));
+  return list.sort((a, b) => pos(a) - pos(b));
+}
+
+const inTab = (it, tab) => tab === "all" || it.tab === tab;
+const visibleItems = () => sorted(G.items.filter((it) => inTab(it, G.tab) && passesFilters(it)));
+
+function renderAssets(d) {
+  G.items = d.gallery || [];
+  G.slug = d.slug;
+  G.selected.clear();
+  const galleryBox = $("assetGalleryUI");
+  if (!G.items.length) {
+    galleryBox.hidden = true;
+    $("assetStatusBadge").textContent = "No assets extracted yet";
+    return;
+  }
+  galleryBox.hidden = false;
+  $("openGalleryBtn").hidden = !d.gallery_url;
+  $("openGalleryBtn").href = d.gallery_url || "#";
+  const total = G.items.reduce((s, it) => s + (it.size || 0), 0);
+  $("galleryStats").textContent = `${G.items.length} files (${fmtBytes(total)})`;
+  $("assetStatusBadge").textContent = `${G.items.length} assets ready`;
+  // Open on the first tab with files: Videos, else GIFs, else Images (then Embeds, SVGs).
+  G.tab = TABS.find((t) => G.items.some((it) => it.tab === t)) || "all";
+  renderAssetGrid();
+  renderFailedDownloads(d.failed_downloads);
+}
+
+function renderAssetGrid() {
+  for (const t of [...TABS, "all"]) {
+    const n = G.items.filter((it) => inTab(it, t) && passesFilters(it)).length;
+    document.querySelector(`[data-count="${t}"]`).textContent = n;
+    const btn = document.querySelector(`.tab-btn[data-tab="${t}"]`);
+    btn.classList.toggle("empty-tab", n === 0);
+    btn.classList.toggle("active", t === G.tab);
+    btn.setAttribute("aria-selected", String(t === G.tab));
+  }
+  $("gSmallWrap").hidden = !(G.tab === "image" || G.tab === "all");
+
+  const grid = $("assetGridUI");
+  grid.classList.toggle("compact", G.tab === "image" || G.tab === "svg");
+  const list = visibleItems();
+  if (!list.length) {
+    const raw = G.items.filter((it) => inTab(it, G.tab)).length;
+    fill(grid, h("div", { class: "g-empty", text: raw ? `All ${raw} hidden by the filters above. Untick "Likely useful" or clear the search to see them.`
+                                                        : "None found on this page" }));
+  } else {
+    fill(grid, ...list.map(card));
+  }
+  syncSelection();
+}
+
+function syncSelection() {
+  const downloadable = visibleItems().filter((it) => it.url);
+  const all = downloadable.length && downloadable.every((it) => G.selected.has(it.id));
+  $("gSelectAll").checked = !!all;
+  $("gSelectAll").disabled = !downloadable.length;
+  $("gDownload").disabled = !G.selected.size;
+  $("gDownload").textContent = G.selected.size ? `Download selected (${G.selected.size})` : "Download selected";
+}
+
+function checkbox(it, cardEl) {
+  if (!it.url) return null;  // link-only embeds have nothing to zip
+  const cb = h("input", { type: "checkbox", class: "g-check", "aria-label": `Select ${it.name}` });
+  cb.checked = G.selected.has(it.id);
+  cardEl.classList.toggle("selected", cb.checked);
+  cb.addEventListener("click", (e) => e.stopPropagation());
+  cb.addEventListener("change", () => {
+    if (cb.checked) G.selected.add(it.id); else G.selected.delete(it.id);
+    cardEl.classList.toggle("selected", cb.checked);
+    syncSelection();
+  });
+  return cb;
+}
+
+function videoThumb(it, box) {
+  const v = h("video", { src: it.url + "#t=0.5", preload: "metadata", playsinline: true, muted: true, loop: true });
+  v.muted = true;
+  const play = h("button", { class: "g-play", type: "button", "aria-label": `Play ${it.name}`, text: "▶" });
+  const toggle = () => {
+    if (v.paused) { v.muted = true; v.loop = true; const p = v.play(); if (p) p.catch(() => {}); play.hidden = true; }
+    else { v.pause(); play.hidden = false; }
+  };
+  play.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
+  box.addEventListener("click", toggle);
+  box.append(v, play);
+  if (it.duration != null) box.append(h("span", { class: "g-badge right", text: fmtDur(it.duration) }));
+}
+
+function gifThumb(it, box) {
+  // Still first frame (canvas) until hover; the animated <img> plays on hover.
+  const img = h("img", { src: it.url, alt: it.name });
+  const canvas = h("canvas", {});
+  let still = false;
+  img.style.display = "none";
+  img.addEventListener("load", () => {
+    try {
+      canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      still = true;
+    } catch (e) { canvas.remove(); img.style.display = ""; }
+  }, { once: true });
+  box.addEventListener("mouseenter", () => { if (still) { img.src = it.url; img.style.display = ""; canvas.style.display = "none"; } });
+  box.addEventListener("mouseleave", () => { if (still) { img.style.display = "none"; canvas.style.display = ""; } });
+  box.addEventListener("click", () => openImageModal(it.url, it.name, it, it.section || "", fmtBytes(it.size)));
+  box.classList.add("zoom");
+  box.append(canvas, img);
+  if (it.animated) box.append(h("span", { class: "g-badge", text: "Animated" }));
+}
+
+function card(it) {
+  const box = h("div", { class: "g-thumb" });
+  const el = h("div", { class: "g-card" });
+  const meta = [];
+  if (it.tab === "video") {
+    videoThumb(it, box);
+    meta.push(fmtDur(it.duration), fmtDims(it), fmtBytes(it.size));
+  } else if (it.tab === "gif") {
+    gifThumb(it, box);
+    meta.push(it.frames ? `${it.frames} frames` : "", fmtDims(it), fmtBytes(it.size));
+  } else if (it.tab === "embed") {
+    if (it.thumb) box.append(h("img", { src: it.thumb, alt: it.name, loading: "lazy" }));
+    else if (it.url) videoThumb(it, box);
+    else box.append(h("span", { class: "muted", text: "No thumbnail" }));
+    box.append(h("span", { class: "g-badge right " + (it.downloaded ? "ok" : "warn"), text: it.downloaded ? "Downloaded" : "Link only" }));
+    meta.push(fmtDur(it.duration), fmtBytes(it.size));
+  } else {  // image | svg
+    if (it.tab === "svg") box.classList.add("light");
+    box.classList.add("zoom");
+    box.append(h("img", { src: it.url, alt: it.name, loading: "lazy" }));
+    box.addEventListener("click", () => openImageModal(it.url, it.name, it, it.section || "", fmtBytes(it.size)));
+    meta.push(fmtDims(it), fmtBytes(it.size));
+  }
+  const cb = checkbox(it, el);
+  if (cb) box.append(cb);
+  if (G.tab === "all" && it.tab !== "gif") box.append(h("span", { class: "g-badge", text: it.tab.toUpperCase() }));
+
+  const section = it.section ? `Section: ${it.section}`
+                : it.page_y != null ? `Section: ~${it.page_y.toLocaleString()}px from top` : "Section: unknown";
+  el.append(box, h("div", { class: "g-info" },
+    h("div", { class: "g-name", title: it.name, text: it.name }),
+    h("div", { class: "g-sec", title: section, text: section }),
+    h("div", { class: "g-meta" }, ...meta.filter(Boolean).map((m) => h("span", { text: m }))),
+    it.tab === "embed" && it.source_url ? h("a", { href: it.source_url, target: "_blank", rel: "noopener", text: "Open link ↗" }) : null,
+    it.merged.length ? h("div", { class: "g-sec", title: it.merged.join(", "), text: `+${it.merged.length} duplicate${it.merged.length > 1 ? "s" : ""} merged` }) : null,
+  ));
+  return el;
+}
+
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => { G.tab = btn.dataset.tab; renderAssetGrid(); });
+});
+$("gSearch").addEventListener("input", renderAssetGrid);
+for (const id of ["gSort", "gUseful", "gHideSmall"]) $(id).addEventListener("change", renderAssetGrid);
+$("gSelectAll").addEventListener("change", (e) => {
+  for (const it of visibleItems()) if (it.url) { if (e.target.checked) G.selected.add(it.id); else G.selected.delete(it.id); }
+  renderAssetGrid();
+});
+$("gDownload").addEventListener("click", async () => {
+  const btn = $("gDownload");
+  btn.disabled = true;
+  btn.textContent = "Zipping…";
+  try {
+    const res = await fetch(`/api/tool/${encodeURIComponent(G.slug)}/zip-selected`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files: [...G.selected] }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Download failed (${res.status})`);
+    const url = URL.createObjectURL(await res.blob());
+    const a = h("a", { href: url, download: `${G.slug}-selected.zip` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) { toast(e.message); }
+  syncSelection();
+});
+
+function renderFailedDownloads(fails) {
+  const box = $("failedBox");
+  const list = $("failedList");
+  const countEl = $("failedCount");
+
+  if (!fails || !fails.length) {
+    box.hidden = true;
+    return;
+  }
+
+  box.hidden = false;
+  countEl.textContent = fails.length;
+
+  const items = fails.map((f) => {
+    return h("li", {},
+      f.section ? h("span", { style: "font-weight:600;margin-right:6px;", text: `[${f.section}]` }) : null,
+      h("a", { href: f.url, target: "_blank", rel: "noopener", style: "color:inherit;text-decoration:underline;", text: f.url }),
+      h("span", { style: "margin-left:6px;opacity:0.85;", text: `— ${f.reason}` })
+    );
+  });
+
+  fill(list, ...items);
+}
+
+// Lightbox modal functions
+function openImageModal(src, filename, dimensions, section, size) {
+  const modal = $("mediaModal");
+  const container = $("modalMediaContainer");
+  const caption = $("modalInfo");
+  fill(container, h("img", { src: src, alt: filename || "" }));
+  const dims = dimensions && dimensions.width ? `${dimensions.width}×${dimensions.height} px` : "";
+  fill(caption,
+    h("span", { style: "font-weight:600;", text: filename || "" }),
+    dims ? h("span", { class: "src", text: dims }) : null,
+    size ? h("span", { class: "src", text: size }) : null,
+    section ? h("span", { class: "muted", text: "📌 " + section }) : null
+  );
+  modal.style.display = "flex";
+}
+
+function openVideoModal(src, filename, dimensions, section, size) {
+  const modal = $("mediaModal");
+  const container = $("modalMediaContainer");
+  const caption = $("modalInfo");
+  fill(container, h("video", { src: src, controls: true, autoplay: true, playsinline: true, style: "max-width:90vw;max-height:80vh;" }));
+  const dims = dimensions && dimensions.width ? `${dimensions.width}×${dimensions.height} px` : "";
+  fill(caption,
+    h("span", { style: "font-weight:600;", text: filename || "" }),
+    dims ? h("span", { class: "src", text: dims }) : null,
+    size ? h("span", { class: "src", text: size }) : null,
+    section ? h("span", { class: "muted", text: "📌 " + section }) : null
+  );
+  modal.style.display = "flex";
+}
+
+function closeMediaModal() {
+  const modal = $("mediaModal");
+  const container = $("modalMediaContainer");
+  const video = container.querySelector("video");
+  if (video) video.pause();
+  fill(container);
+  modal.style.display = "none";
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeMediaModal();
+});
+
+function renderSite(d) {
+  const box = $("site");
+  const s = d.site;
+  if (!s) { fill(box, h("div", { class: "empty", text: "No site_data.json yet. It's written by the grab stage." })); return; }
+  const url = safeUrl(s.final_url || s.url);
+  const kids = [];
+  kids.push(url ? h("a", { class: "site-title", href: url, target: "_blank", rel: "noopener", text: s.title || url })
+                : h("div", { class: "site-title", text: s.title || "(no title)" }));
+  kids.push(h("p", { class: "desc", text: s.description || "No meta description on this page." }));
+  kids.push(s.hero_url ? h("a", { href: s.hero_url, target: "_blank" }, h("img", { class: "hero", src: s.hero_url, alt: "Hero section screenshot", loading: "lazy" }))
+                       : h("div", { class: "empty", text: "No hero screenshot." }));
+  const videos = Array.isArray(s.videos) ? s.videos : [], embeds = Array.isArray(s.embeds) ? s.embeds : [];
+  const images = Array.isArray(s.images) ? s.images : [];
+  kids.push(h("div", { class: "stats" },
+    h("span", { class: "stat" }, h("b", { text: videos.length }), " videos"),
+    h("span", { class: "stat" }, h("b", { text: embeds.length }), " embeds"),
+    h("span", { class: "stat" }, h("b", { text: images.length }), " large images"),
+    h("span", { class: "stat" }, h("b", { text: (s.sections_recorded || []).length }), " sections recorded")));
+
+  const heads = [...(s.h1 || []).map((t) => ["H1", t]), ...(s.h2 || []).map((t) => ["H2", t])];
+  kids.push(h("div", { class: "sub", text: "Headings" }));
+  kids.push(heads.length ? h("ul", { class: "plain" }, heads.map(([tg, t]) => h("li", {}, h("span", { class: "tag", text: tg }), t)))
+                         : h("div", { class: "muted", text: "None found." }));
+
+  const feats = Array.isArray(s.features) ? s.features : [];
+  kids.push(h("div", { class: "sub", text: `Key features (${feats.length})` }));
+  if (feats.length) {
+    const list = h("ul", { class: "plain" }, feats.slice(0, 8).map((f) => h("li", { class: "feat" }, h("b", { text: f.title }), f.text ? h("span", { text: f.text }) : null)));
+    kids.push(list);
+    if (feats.length > 8) kids.push(h("details", {}, h("summary", { text: `Show ${feats.length - 8} more` }),
+      h("ul", { class: "plain" }, feats.slice(8).map((f) => h("li", { class: "feat" }, h("b", { text: f.title }), f.text ? h("span", { text: f.text }) : null)))));
+  } else kids.push(h("div", { class: "muted", text: "None found." }));
+
+  const vlinks = [...videos, ...embeds].map(safeUrl).filter(Boolean);
+  kids.push(h("div", { class: "sub", text: "Video URLs" }));
+  kids.push(vlinks.length ? h("div", { class: "links" }, vlinks.map((u) => h("a", { href: u, target: "_blank", rel: "noopener", title: u, text: u })))
+                          : h("div", { class: "muted", text: "None found." }));
+  const ilinks = images.map((i) => safeUrl(i && i.url)).filter(Boolean);
+  if (ilinks.length) kids.push(h("details", {}, h("summary", { text: `Image URLs (${ilinks.length})` }),
+    h("div", { class: "links" }, ilinks.map((u) => h("a", { href: u, target: "_blank", rel: "noopener", title: u, text: u })))));
+  fill(box, ...kids);
+}
+
+function renderScript(d) {
+  const box = $("scriptBox");
+  $("copyBtn").disabled = !d.script;
+  fill(box, d.script ? h("pre", { id: "script", text: d.script })
+                               : h("div", { class: "empty", text: "No script.txt yet. It's written by the script stage (needs ANTHROPIC_API_KEY)." }));
+}
+$("copyBtn").addEventListener("click", async () => {
+  const text = state.data && state.data.script;
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const ta = h("textarea", {}); ta.value = text; document.body.append(ta); ta.select();
+    try { document.execCommand("copy"); } catch (e2) {} ta.remove();
+  }
+  toast("Script copied");
+});
+
+const BADGE = { covered: "covered", missing: "missing", needs_manual: "needs manual" };
+
+function clipCell(r) {
+  if (!r.clip) return h("div", { class: "clipbox" }, h("div", { class: "none", text: "no clip" }));
+  // "#t=1": show a frame 1s in as the still (frame 0 of a scroll clip is often blank).
+  const v = h("video", { src: r.clip + "#t=1", muted: true, loop: true, playsinline: true, preload: "metadata", "aria-label": `Shot ${r.shot} clip` });
+  v.muted = true;
+  const play = () => { const p = v.play(); if (p) p.catch(() => {}); };
+  v.addEventListener("mouseenter", play);
+  v.addEventListener("mouseleave", () => v.pause());
+  v.addEventListener("click", () => (v.paused ? play() : v.pause()));  // touch screens
+  return h("div", { class: "clipbox" }, v, h("span", { class: "hint", text: r.manual ? "manual" : "hover to play" }));
+}
+
+function renderShots(d) {
+  const box = $("shots");
+  $("shotNote").textContent = d.has_manifest ? "Hover a clip to play it" : "No manifest.json yet";
+  if (!d.shots.length) { fill(box, h("div", { class: "empty", text: "No shot list yet. Run the pipeline first." })); return; }
+  const canUpload = d.has_manifest && !d.running;
+  const rows = d.shots.map((r) => {
+    const label = r.badge === "covered" ? "Replace clip" : "Upload clip";
+    const btn = h("button", { class: "btn small" + (r.badge === "covered" ? " ghost" : ""), type: "button", text: label,
+                              disabled: !canUpload, title: canUpload ? `Saved as clips/shot${String(r.shot).padStart(2, "0")}_manual.mp4` : "Run the pipeline first",
+                              onclick: () => pickFile(r.shot) });
+    const extra = (r.badge !== "covered" && r.clip)
+      ? h("button", { class: "btn small ghost", type: "button", text: "Replace clip", disabled: !canUpload, onclick: () => pickFile(r.shot) }) : null;
+    const scoreText = (r.match_score != null && r.match_score > 0) ? `${Math.round(r.match_score * 100)}%` : "â€”";
+    return h("tr", { "data-shot": r.shot },
+      h("td", { class: "num", text: r.shot }),
+      h("td", { class: "line", "data-label": "Script line", text: r.script_line || "â€”" }),
+      h("td", { class: "visual", "data-label": "Visual needed", text: r.visual_needed || "â€”" }),
+      h("td", { "data-label": "Source" }, h("span", { class: "src", text: r.source })),
+      h("td", { class: "clip" }, clipCell(r)),
+      h("td", { "data-label": "Score", class: "score" }, h("span", { class: "tag", text: scoreText })),
+      h("td", { "data-label": "Status" }, h("span", { class: "badge " + r.badge, text: BADGE[r.badge] || r.badge }),
+        h("div", { class: "rowactions" }, btn, extra, h("span", { class: "progress", id: `prog${r.shot}` }))),
+      h("td", { class: "reason", "data-label": "Reason", text: r.reason || (r.badge === "covered" ? "" : "â€”") }),
+    );
+  });
+  fill(box, h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, ["#", "Script line", "Visual needed", "Source", "Clip", "Score", "Status", "Reason"].map((t) => h("th", { text: t })))),
+    h("tbody", {}, rows))));
+}
+
+// ---------- upload ----------
+function pickFile(shot) {
+  state.uploadShot = shot;
+  const fi = $("fileInput");
+  fi.value = "";
+  fi.click();
+}
+$("fileInput").addEventListener("change", (e) => {
+  const file = e.target.files[0], shot = state.uploadShot, slug = state.slug;
+  if (!file || shot == null || !slug) return;
+  const prog = $(`prog${shot}`);
+  const row = document.querySelector(`tr[data-shot="${shot}"]`);
+  row && row.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  const fd = new FormData();
+  fd.append("file", file);
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `/api/tool/${encodeURIComponent(slug)}/shot/${shot}/upload`);
+  xhr.upload.onprogress = (ev) => {
+    if (!prog || !ev.lengthComputable) return;
+    const pct = Math.round((ev.loaded / ev.total) * 100);
+    prog.textContent = pct < 100 ? `Uploading ${pct}%` : "Converting to 1080x1920â€¦";
+  };
+  xhr.onload = () => {
+    let body = null;
+    try { body = JSON.parse(xhr.responseText); } catch (err) {}
+    if (xhr.status >= 200 && xhr.status < 300) {
+      toast(`Shot ${shot} saved` + (body && body.qa_notes && body.qa_notes.length ? " (with QA notes)" : ""));
+      openTool(slug);
+    } else {
+      if (prog) { prog.textContent = ""; prog.after(h("span", { class: "upload-error", text: (body && body.error) || `Upload failed (${xhr.status})` })); }
+      row && row.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    }
+  };
+  xhr.onerror = () => { if (prog) prog.textContent = "Upload failed (network)"; row && row.querySelectorAll("button").forEach((b) => (b.disabled = false)); };
+  if (prog) prog.textContent = "Uploading 0%";
+  xhr.send(fd);
+});
+
+// ---------- start ----------
+(async () => {
+  const r = await refreshTools();
+  const fromHash = decodeURIComponent(location.hash.slice(1));
+  const running = r && Object.entries(r.running)[0];
+  if (running) attachJob(running[1], running[0]);
+  const slug = (fromHash && r && r.tools.some((t) => t.slug === fromHash)) ? fromHash
+             : running ? running[0] : store.get("lastTool");
+  if (slug && r && r.tools.some((t) => t.slug === slug)) openTool(slug);
+})();
+</script>
+</body>
+</html>
+

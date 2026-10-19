@@ -734,6 +734,8 @@ def assemble_cut(slug: str):
 
 @app.get("/")
 def index():
+    if (ROOT / "index.html").is_file():
+        return FileResponse(ROOT / "index.html", media_type="text/html; charset=utf-8")
     return FileResponse(ROOT / "web" / "pipeline.html", media_type="text/html; charset=utf-8")
 
 

@@ -215,6 +215,9 @@
 </style>
 </head>
 <body>
+<div id="staticHostBanner" style="display:none;background:#fef3c7;color:#92400e;border-bottom:1px solid #f59e0b;padding:10px 16px;text-align:center;font-size:13.5px;font-weight:500;">
+  ⚠️ <strong>GitHub Pages Static Host</strong>: The UI frontend is displayed, but backend AI pipeline execution (Playwright, FFmpeg, script generation) requires a running Python FastAPI backend (e.g., hosted on Render/Railway or run locally via <code>python app.py</code>).
+</div>
 <header class="topbar">
   <div class="wrap">
     <span class="brand">Reel Pipeline</span>
@@ -381,12 +384,29 @@ function toast(msg) {
   document.body.append(t);
   setTimeout(() => t.remove(), 2200);
 }
+if (window.location.hostname.includes("github.io") || window.location.protocol === "file:") {
+  const b = $("staticHostBanner");
+  if (b) b.style.display = "block";
+}
+
 async function api(path, opts) {
-  const res = await fetch(path, opts);
-  let body = null;
-  try { body = await res.json(); } catch (e) {}
-  if (!res.ok) throw new Error((body && body.error) || `Request failed (${res.status})`);
-  return body;
+  try {
+    const res = await fetch(path, opts);
+    let body = null;
+    try { body = await res.json(); } catch (e) {}
+    if (!res.ok) {
+      if (res.status === 404 && (window.location.hostname.includes("github.io") || window.location.protocol === "file:")) {
+        throw new Error("Backend server is not running on GitHub Pages (static host). Deploy to Render/Railway or run 'python app.py' locally.");
+      }
+      throw new Error((body && body.error) || `Request failed (${res.status})`);
+    }
+    return body;
+  } catch (err) {
+    if (window.location.hostname.includes("github.io") || window.location.protocol === "file:") {
+      throw new Error("Backend server is not reachable on GitHub Pages. Run 'python app.py' locally or deploy on Render/Railway.");
+    }
+    throw err;
+  }
 }
 
 // ---------- tools dropdown ----------
