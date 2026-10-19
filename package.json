@@ -1,0 +1,9 @@
+{
+  "name": "reel-pipeline",
+  "version": "1.0.0",
+  "description": "Short-Form AI Tool Generation Pipeline",
+  "scripts": {
+    "dev": "python app.py",
+    "start": "python app.py"
+  }
+}
