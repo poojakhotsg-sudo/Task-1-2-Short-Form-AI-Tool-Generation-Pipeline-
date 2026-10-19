@@ -41,6 +41,7 @@ from urllib.parse import unquote, urlparse
 import requests
 from playwright.sync_api import Error as PWError
 from playwright.sync_api import sync_playwright
+from pipeline.browser_utils import launch_or_connect, safe_close
 
 try:
     from PIL import Image, ImageSequence
@@ -427,11 +428,7 @@ def open_page(pw, url, state):
             wait = BACKOFF[attempt - 1]
             log.info("retry %d/%d in %ds%s", attempt, len(BACKOFF), wait, " (visible browser)" if headed else "")
             time.sleep(wait)
-        try:
-            browser = pw.chromium.launch(headless=not headed, args=["--autoplay-policy=no-user-gesture-required"])
-        except PWError as e:
-            log.warning("browser launch failed (%s); trying headless", str(e).splitlines()[0])
-            browser = pw.chromium.launch(headless=True, args=["--autoplay-policy=no-user-gesture-required"])
+        browser = launch_or_connect(pw, headed=headed, extra_args=["--autoplay-policy=no-user-gesture-required"])
         ctx = browser.new_context(**device)
         page = ctx.new_page()
         doc = {}
@@ -694,7 +691,7 @@ def record_embed(pw, url, referer, raw_dir, staging, stem):
     """Fallback for an embed yt-dlp can't fetch: play it muted at 1280x720 and record 8 s."""
     play_url = url + ("&" if "?" in url else "?") + "autoplay=1&mute=1&muted=1"
     tmp = Path(tempfile.mkdtemp(prefix="rp_embed_"))
-    browser = pw.chromium.launch(headless=True, args=["--autoplay-policy=no-user-gesture-required"])
+    browser = launch_or_connect(pw, headed=False, extra_args=["--autoplay-policy=no-user-gesture-required"])
     try:
         ctx = browser.new_context(viewport=EMBED_REC_VIEWPORT, record_video_dir=str(tmp),
                                   record_video_size=EMBED_REC_VIEWPORT, extra_http_headers={"Referer": referer})
@@ -856,7 +853,7 @@ def record_scroll(pw, url, out_dir):
     Returns (items for the manifest, error message or None)."""
     raw_dir, scroll_dir = out_dir / "raw", out_dir / "scroll"
     tmp = Path(tempfile.mkdtemp(prefix="rp_scroll_"))
-    browser = pw.chromium.launch(headless=True, args=["--autoplay-policy=no-user-gesture-required"])
+    browser = launch_or_connect(pw, headed=False, extra_args=["--autoplay-policy=no-user-gesture-required"])
     marks, sections = {}, []
     try:
         ctx = browser.new_context(viewport=REC_VIEWPORT, screen=REC_VIEWPORT, is_mobile=True, has_touch=True,

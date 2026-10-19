@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 from pydantic import BaseModel, ValidationError
 
+from .browser_utils import launch_or_connect, block_resources, safe_close
 from .grabber import EMBED_RE, close_cookie_popups, slugify
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -141,34 +142,40 @@ def fetch_site_text(url, max_subpages=2):
     url = url if url.startswith("http") else "https://" + url
     parts = []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(user_agent=UA, viewport={"width": 1440, "height": 900})
-        home = _load(page, url)
-        if re.search(r"just a moment|verify you are human|checking your browser", home[:300], re.I):
-            page.wait_for_timeout(8000)  # give bot checks a chance to clear
-            home = _page_text(page)
-        parts.append(f"=== {page.url}\n{home}")
-
-        # Thin landing pages often explain the product in an embedded demo video instead.
-        for src in page.evaluate("[...document.querySelectorAll('iframe')].map(f => f.src)"):
-            if EMBED_RE.search(src or ""):
-                info = _embed_info(src.split("?")[0])
-                if info:
-                    parts.append(f"=== embedded video {src}\n{info}")
-
-        host = urlparse(page.url).netloc
-        links = page.evaluate("[...document.querySelectorAll('a[href]')].map(a => a.href)")
-        subpages = []
-        for link in links:
-            link = link.split("#")[0]
-            if urlparse(link).netloc == host and SUBPAGE_HINT.search(link) and link not in subpages + [page.url]:
-                subpages.append(link)
-        for link in subpages[:max_subpages]:
+        browser = launch_or_connect(p)
+        try:
+            page = browser.new_page(user_agent=UA, viewport={"width": 1440, "height": 900})
             try:
-                parts.append(f"=== {link}\n{_load(page, link)}")
-            except Exception as e:
-                print(f"  ! skipped {link}: {e}")
-        browser.close()
+                block_resources(page)
+                home = _load(page, url)
+                if re.search(r"just a moment|verify you are human|checking your browser", home[:300], re.I):
+                    page.wait_for_timeout(8000)  # give bot checks a chance to clear
+                    home = _page_text(page)
+                parts.append(f"=== {page.url}\n{home}")
+
+                # Thin landing pages often explain the product in an embedded demo video instead.
+                for src in page.evaluate("[...document.querySelectorAll('iframe')].map(f => f.src)"):
+                    if EMBED_RE.search(src or ""):
+                        info = _embed_info(src.split("?")[0])
+                        if info:
+                            parts.append(f"=== embedded video {src}\n{info}")
+
+                host = urlparse(page.url).netloc
+                links = page.evaluate("[...document.querySelectorAll('a[href]')].map(a => a.href)")
+                subpages = []
+                for link in links:
+                    link = link.split("#")[0]
+                    if urlparse(link).netloc == host and SUBPAGE_HINT.search(link) and link not in subpages + [page.url]:
+                        subpages.append(link)
+                for link in subpages[:max_subpages]:
+                    try:
+                        parts.append(f"=== {link}\n{_load(page, link)}")
+                    except Exception as e:
+                        print(f"  ! skipped {link}: {e}")
+            finally:
+                safe_close(page=page)
+        finally:
+            safe_close(browser=browser)
 
     text = re.sub(r"\n\s*\n+", "\n", "\n\n".join(parts)).strip()
     if len(text) > MAX_SITE_CHARS:

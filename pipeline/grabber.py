@@ -40,6 +40,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 from . import qa
+from .browser_utils import launch_or_connect, block_resources, safe_close
 
 W, H = 1080, 1920
 VIEWPORT_W, VIEWPORT_H = 390, 844
@@ -817,44 +818,51 @@ def _record_embed_playwright(p, src_url, out, headed=False, record_seconds=10.0,
     Returns True if the recording succeeded and out was written."""
     log_obj.info("Playwright fallback: recording embed %s", src_url)
     with tempfile.TemporaryDirectory() as tmp:
-        browser = p.chromium.launch(headless=not headed)
-        dev = mobile_device(p)
-        ctx = browser.new_context(
-            **dev,
-            record_video_dir=tmp,
-            record_video_size={"width": VIEWPORT_W, "height": VIEWPORT_H},
-        )
-        ctx.set_default_timeout(20000)
-        page = ctx.new_page()
+        browser = launch_or_connect(p, headed=headed)
+        video = None
         try:
-            page.goto(src_url, wait_until="domcontentloaded", timeout=30000)
-        except PlaywrightTimeout:
-            pass
-        except PlaywrightError as e:
-            log_obj.warning("embed load failed: %s", e)
-            page.video  # must access before close to flush
-            ctx.close()
-            browser.close()
-            return False
-        # Try to click the play button
-        for sel in ["button[aria-label*='play' i]", ".ytp-play-button", ".vp-play",
-                    "button.play", "[data-plyr='play']", "video"]:
+            dev = mobile_device(p)
+            ctx = browser.new_context(
+                **dev,
+                record_video_dir=tmp,
+                record_video_size={"width": VIEWPORT_W, "height": VIEWPORT_H},
+            )
             try:
-                loc = page.locator(sel).first
-                if loc.is_visible(timeout=1500):
-                    loc.click(timeout=2000)
-                    break
-            except Exception:
-                pass
-        # Also try JS autoplay on any <video> in the frame
-        try:
-            page.evaluate("() => { document.querySelectorAll('video').forEach(v => { v.muted=true; v.play().catch(()=>{}); }); }")
-        except Exception:
-            pass
-        page.wait_for_timeout(int(record_seconds * 1000))
-        video = page.video
-        ctx.close()  # flushes
-        browser.close()
+                ctx.set_default_timeout(20000)
+                page = ctx.new_page()
+                try:
+                    block_resources(page)
+                    try:
+                        page.goto(src_url, wait_until="domcontentloaded", timeout=30000)
+                    except PlaywrightTimeout:
+                        pass
+                    except PlaywrightError as e:
+                        log_obj.warning("embed load failed: %s", e)
+                        return False
+                    # Try to click the play button
+                    for sel in ["button[aria-label*='play' i]", ".ytp-play-button", ".vp-play",
+                                "button.play", "[data-plyr='play']", "video"]:
+                        try:
+                            loc = page.locator(sel).first
+                            if loc.is_visible(timeout=1500):
+                                loc.click(timeout=2000)
+                                break
+                        except Exception:
+                            pass
+                    # Also try JS autoplay on any <video> in the frame
+                    try:
+                        page.evaluate("() => { document.querySelectorAll('video').forEach(v => { v.muted=true; v.play().catch(()=>{}); }); }")
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(int(record_seconds * 1000))
+                    video = page.video
+                finally:
+                    safe_close(page=page)
+            finally:
+                safe_close(context=ctx)
+        finally:
+            safe_close(browser=browser)
+
         if video is None:
             return False
         webm = Path(video.path())
@@ -924,83 +932,88 @@ def extract_demo_videos(
 
     with sync_playwright() as p:
         # ---- Phase 1: scrape all video URLs ----
-        browser = p.chromium.launch(headless=not headed)
-        dev = mobile_device(p)
-        ctx = browser.new_context(**dev)
-        ctx.set_default_timeout(20000)
-        page = ctx.new_page()
-
-        page.on("response", lambda r: network_videos.add(r.url)
-                if r.headers.get("content-type", "").startswith("video/")
-                and not r.url.startswith("blob:") else None)
-
-        ok, reason = load_page(page, url)
-        if not ok:
-            vlog.error("page failed to load: %s", reason)
-            ctx.close(); browser.close()
-            return results
-
-        clean_page(page)
-        # Full scroll to trigger lazy loading
-        info = page.evaluate(FIND_BLOCKS_JS)
-        for y in range(0, info["height"], info["vh"] // 2):
-            page.evaluate(f"scrollTo(0, {y})")
-            page.wait_for_timeout(200)
-        # Trigger lazy data-src promotion
-        promoted = page.evaluate(LAZY_VIDEO_TRIGGER_JS)
-        vlog.info("lazy-video trigger promoted %d src attributes", promoted)
-        page.wait_for_timeout(1500)
-
-        # Collect direct video URLs
-        direct_entries = page.evaluate(VIDEO_SRCS_JS)
-        final_url = page.url
-
-        # Also include any network-intercepted video URLs not already in direct_entries
-        direct_urls = {urljoin(final_url, v["pick"]) for v in direct_entries if v.get("pick")}
-        extra_urls = [u for u in sorted(network_videos) if u not in direct_urls]
-        extra_entries = [{"pick": u, "all": [u], "autoplay": False, "muted": False, "loop": False}
-                        for u in extra_urls]
-        all_direct = direct_entries + extra_entries
-
-        # Collect embed iframes
-        embed_srcs = []
-        for s in page.evaluate(ALL_EMBEDS_JS):
-            full = urljoin(final_url, s)
-            if full not in embed_srcs:
-                embed_srcs.append(full)
-
-        vlog.info("found %d direct video src(s), %d embed iframe(s)",
-                  len(all_direct), len(embed_srcs))
-        if not all_direct and not embed_srcs:
-            vlog.info("NOTHING FOUND: no <video> tags or embed iframes on %s", url)
-
-        # ---- Phase 2: download direct videos ----
-        downloaded_direct = []
-        for entry in all_direct:
-            src_url = urljoin(final_url, entry["pick"])
-            vtype = "autoplay-bg" if entry.get("autoplay") and entry.get("muted") else "video"
+        browser = launch_or_connect(p, headed=headed)
+        try:
+            dev = mobile_device(p)
+            ctx = browser.new_context(**dev)
             try:
-                resp = page.request.get(src_url, timeout=60000)
-                if not resp.ok:
-                    vlog.warning("HTTP %s for %s – skipped", resp.status, src_url)
-                    continue
-                body = resp.body()
-                if len(body) < 20_000:
-                    vlog.info("skip tiny file (%d bytes) %s", len(body), src_url)
-                    continue
-                ext = Path(urlparse(src_url).path).suffix.lower()
-                if ext not in {".mp4", ".webm", ".mov", ".m4v"}:
-                    ext = ".mp4"
-                raw = clips_dir / f"_raw_direct_{len(downloaded_direct) + 1:02d}{ext}"
-                raw.write_bytes(body)
-                downloaded_direct.append({"raw": raw, "source": src_url, "type": vtype})
-                vlog.info("downloaded direct video: %s  (%.1f MB, type=%s)",
-                          src_url, len(body) / 1e6, vtype)
-            except Exception as e:
-                vlog.warning("could not download %s: %s", src_url, e)
+                ctx.set_default_timeout(20000)
+                page = ctx.new_page()
+                try:
+                    block_resources(page, block_types=("image", "font"))
+                    page.on("response", lambda r: network_videos.add(r.url)
+                            if r.headers.get("content-type", "").startswith("video/")
+                            and not r.url.startswith("blob:") else None)
 
-        ctx.close()
-        browser.close()
+                    ok, reason = load_page(page, url)
+                    if not ok:
+                        vlog.error("page failed to load: %s", reason)
+                        return results
+
+                    clean_page(page)
+                    # Full scroll to trigger lazy loading
+                    info = page.evaluate(FIND_BLOCKS_JS)
+                    for y in range(0, info["height"], info["vh"] // 2):
+                        page.evaluate(f"scrollTo(0, {y})")
+                        page.wait_for_timeout(200)
+                    # Trigger lazy data-src promotion
+                    promoted = page.evaluate(LAZY_VIDEO_TRIGGER_JS)
+                    vlog.info("lazy-video trigger promoted %d src attributes", promoted)
+                    page.wait_for_timeout(1500)
+
+                    # Collect direct video URLs
+                    direct_entries = page.evaluate(VIDEO_SRCS_JS)
+                    final_url = page.url
+
+                    # Also include any network-intercepted video URLs not already in direct_entries
+                    direct_urls = {urljoin(final_url, v["pick"]) for v in direct_entries if v.get("pick")}
+                    extra_urls = [u for u in sorted(network_videos) if u not in direct_urls]
+                    extra_entries = [{"pick": u, "all": [u], "autoplay": False, "muted": False, "loop": False}
+                                    for u in extra_urls]
+                    all_direct = direct_entries + extra_entries
+
+                    # Collect embed iframes
+                    embed_srcs = []
+                    for s in page.evaluate(ALL_EMBEDS_JS):
+                        full = urljoin(final_url, s)
+                        if full not in embed_srcs:
+                            embed_srcs.append(full)
+
+                    vlog.info("found %d direct video src(s), %d embed iframe(s)",
+                              len(all_direct), len(embed_srcs))
+                    if not all_direct and not embed_srcs:
+                        vlog.info("NOTHING FOUND: no <video> tags or embed iframes on %s", url)
+
+                    # ---- Phase 2: download direct videos ----
+                    downloaded_direct = []
+                    for entry in all_direct:
+                        src_url = urljoin(final_url, entry["pick"])
+                        vtype = "autoplay-bg" if entry.get("autoplay") and entry.get("muted") else "video"
+                        try:
+                            resp = page.request.get(src_url, timeout=60000)
+                            if not resp.ok:
+                                vlog.warning("HTTP %s for %s – skipped", resp.status, src_url)
+                                continue
+                            body = resp.body()
+                            if len(body) < 20_000:
+                                vlog.info("skip tiny file (%d bytes) %s", len(body), src_url)
+                                continue
+                            ext = Path(urlparse(src_url).path).suffix.lower()
+                            if ext not in {".mp4", ".webm", ".mov", ".m4v"}:
+                                ext = ".mp4"
+                            raw = clips_dir / f"_raw_direct_{len(downloaded_direct) + 1:02d}{ext}"
+                            raw.write_bytes(body)
+                            downloaded_direct.append({"raw": raw, "source": src_url, "type": vtype})
+                            vlog.info("downloaded direct video: %s  (%.1f MB, type=%s)",
+                                      src_url, len(body) / 1e6, vtype)
+                        except Exception as e:
+                            vlog.warning("could not download %s: %s", src_url, e)
+                finally:
+                    safe_close(page=page)
+            finally:
+                safe_close(context=ctx)
+        finally:
+            safe_close(browser=browser)
 
         # ---- Phase 3: download embeds via yt-dlp (Playwright fallback on failure) ----
         ytdlp = shutil.which("yt-dlp")
@@ -1144,24 +1157,21 @@ def pick_sections(blocks, max_n=MAX_SECTIONS):
 
 
 def _open_session(p, tmp, headed):
-    browser = p.chromium.launch(headless=not headed)
+    browser = launch_or_connect(p, headed=headed)
     dev = mobile_device(p)
     ctx = browser.new_context(**dev,
                               record_video_dir=tmp,
                               record_video_size={"width": VIEWPORT_W, "height": VIEWPORT_H})
     ctx.set_default_timeout(20000)
     page = ctx.new_page()
+    block_resources(page)
     check_mobile_layout(page, log)
     return browser, ctx, page
 
 
 def _close_session(browser, ctx, page):
-    video = page.video
-    try:
-        ctx.close()  # flushes the recording
-    except PlaywrightError:
-        pass
-    browser.close()
+    video = page.video if page else None
+    safe_close(page=page, context=ctx, browser=browser)
     return Path(video.path()) if video else None
 
 

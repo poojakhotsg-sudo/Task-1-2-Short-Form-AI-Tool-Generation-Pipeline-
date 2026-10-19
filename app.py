@@ -33,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from extract_assets import tool_name as site_folder
 import gallery
 from pipeline import qa
+from pipeline.db import get_job_state, save_job_state
 from pipeline.grabber import H, W, slugify
 
 from dotenv import load_dotenv
@@ -49,6 +50,26 @@ app.mount("/out", StaticFiles(directory=OUT), name="out")
 
 jobs = {}  # job_id -> {"tool", "slug", "url", "num", "status", "log", "proc", "drive", "started"}
 lock = threading.Lock()
+
+
+def is_job_running():
+    with lock:
+        return any(j.get("status") in ("running", "stopping") for j in jobs.values())
+
+
+def extract_stage_from_log(log_lines):
+    for ln in reversed(log_lines or []):
+        if "[PROGRESS]" in ln:
+            return ln.split("[PROGRESS]")[-1].strip()
+        elif "Downloaded " in ln and " files" in ln:
+            return ln.strip()
+        elif "Scrolling " in ln:
+            return "Scrolling page..."
+        elif "Navigating to " in ln:
+            return "Navigating to page..."
+        elif ln.startswith("> "):
+            return ln.strip()[2:].rstrip(" .")
+    return ""
 
 
 # ---------- helpers ----------
@@ -105,6 +126,8 @@ def format_bytes(num_bytes):
 
 def worker(job_id):
     job = jobs[job_id]
+    save_job_state(job_id=job_id, url=job["url"], stage="starting", status="running",
+                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
     cmd = [sys.executable, "-u", str(ROOT / "run.py"), "--tool", job["tool"], "--url", job["url"], "--out", str(OUT)]
     if job["num"]:
         cmd += ["--num", job["num"]]
@@ -115,13 +138,22 @@ def worker(job_id):
     except OSError as e:
         job["log"].append(f"could not start run.py: {e}")
         job["status"] = "failed"
+        save_job_state(job_id=job_id, url=job["url"], stage="failed", status="failed",
+                       events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
         return
     job["proc"] = proc
+    last_sync = time.time()
     for line in proc.stdout:
         line = line.rstrip("\n")
         job["log"].append(line)
         if "Drive folder:" in line and (m := DRIVE_RE.search(line)):
             job["drive"] = m.group(0)
+        now = time.time()
+        if now - last_sync > 2.0 or line.startswith("> ") or "[PROGRESS]" in line:
+            last_sync = now
+            stg = extract_stage_from_log(job["log"])
+            save_job_state(job_id=job_id, url=job["url"], stage=stg, status=job["status"],
+                           events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
     code = proc.wait()
     if job["status"] == "stopping":
         job["status"] = "stopped"
@@ -129,10 +161,15 @@ def worker(job_id):
         job["status"] = "done" if code == 0 else "failed"
         if code:
             job["log"].append(f"run.py exited with code {code}")
+    stg = extract_stage_from_log(job["log"]) or job["status"]
+    save_job_state(job_id=job_id, url=job["url"], stage=stg, status=job["status"],
+                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
 
 
 @app.post("/api/run")
 def start_run(tool: str = Form(...), url: str = Form(...), num: str = Form("")):
+    if is_job_running():
+        raise HTTPException(400, "busy, try again")
     tool, url, num = tool.strip(), url.strip(), num.strip()
     slug = slugify(tool)
     if not slug:
@@ -142,12 +179,11 @@ def start_run(tool: str = Form(...), url: str = Form(...), num: str = Form("")):
     if num and not re.fullmatch(r"\d{1,3}", num):
         raise HTTPException(400, "Number must be 1-3 digits, e.g. 01.")
     with lock:
-        existing = busy(slug)
-        if existing:
-            return {"job": existing, "slug": slug, "already_running": True}
         job_id = uuid.uuid4().hex[:8]
         jobs[job_id] = {"tool": tool, "slug": slug, "url": url, "num": num, "status": "running",
                         "log": [], "proc": None, "drive": None, "started": time.time()}
+    save_job_state(job_id=job_id, url=url, stage="starting", status="running",
+                   events=[], tool=tool, slug=slug, out_dir=OUT)
     threading.Thread(target=worker, args=(job_id,), daemon=True).start()
     return {"job": job_id, "slug": slug, "already_running": False}
 
@@ -158,12 +194,16 @@ EXTRACT_NAME_RE = re.compile(r"[a-z0-9][a-z0-9.-]*")
 def asset_worker(job_id):
     """Run extract_assets.py for each URL of the batch, one after another. A failed URL doesn't stop the rest."""
     job = jobs[job_id]
+    save_job_state(job_id=job_id, url=job["url"], stage="extracting", status="running",
+                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONWARNINGS": "ignore"}
     for i, (url, name) in enumerate(zip(job["urls"], job["names"]), 1):
         if job["status"] == "stopping":
             break
         job.update(index=i, url=url, slug=name)
         job["log"].append(f"> Extracting {i} of {len(job['urls'])}: {url}")
+        save_job_state(job_id=job_id, url=url, stage=f"Extracting {i}/{len(job['urls'])}", status=job["status"],
+                       events=job["log"], tool=name, slug=name, out_dir=OUT)
         cmd = [sys.executable, "-u", str(ROOT / "extract_assets.py"), "--url", url, "--out", str(OUT / name)]
         try:
             proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -173,11 +213,21 @@ def asset_worker(job_id):
             job["results"].append({"name": name, "url": url, "status": "failed"})
             continue
         job["proc"] = proc
+        last_sync = time.time()
         for line in proc.stdout:
-            job["log"].append(line.rstrip("\n"))
+            line = line.rstrip("\n")
+            job["log"].append(line)
+            now = time.time()
+            if now - last_sync > 2.0 or line.startswith("> ") or "[PROGRESS]" in line:
+                last_sync = now
+                stg = extract_stage_from_log(job["log"]) or f"Extracting {i}/{len(job['urls'])}"
+                save_job_state(job_id=job_id, url=url, stage=stg, status=job["status"],
+                               events=job["log"], tool=name, slug=name, out_dir=OUT)
         code = proc.wait()
         job["results"].append({"name": name, "url": url, "status": "ok" if code == 0 else "failed"})
     job["status"] = "stopped" if job["status"] == "stopping" else "done"
+    save_job_state(job_id=job_id, url=job["url"], stage=job["status"], status=job["status"],
+                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
 
 
 URL_RE = re.compile(r"^https?://[\w.-]+\.[a-z]{2,}(:\d+)?(/\S*)?$", re.I)
@@ -186,6 +236,8 @@ URL_RE = re.compile(r"^https?://[\w.-]+\.[a-z]{2,}(:\d+)?(/\S*)?$", re.I)
 @app.post("/api/extract")
 def start_extract(url: str = Form(...)):
     """One or more URLs, one per line; extracted one after another into out/<domain>/."""
+    if is_job_running():
+        raise HTTPException(400, "busy, try again")
     urls = []
     for u in re.split(r"[\s,]+", url.strip()):
         if not u:
@@ -199,14 +251,12 @@ def start_extract(url: str = Form(...)):
         raise HTTPException(400, "Paste at least one website URL.")
     names = [site_folder(u) for u in urls]
     with lock:
-        existing = next((jid for jid, j in jobs.items() if j.get("type") == "extract" and j["status"] in ("running", "stopping")), None)
-        if existing:
-            j = jobs[existing]
-            return {"job": existing, "names": j["names"], "already_running": True}
         job_id = uuid.uuid4().hex[:8]
         jobs[job_id] = {"tool": names[0], "slug": names[0], "url": urls[0], "urls": urls, "names": names, "index": 0,
                         "results": [], "num": "", "status": "running", "log": [], "proc": None, "drive": None,
                         "started": time.time(), "type": "extract"}
+    save_job_state(job_id=job_id, url=urls[0], stage="extracting", status="running",
+                   events=[], tool=names[0], slug=names[0], out_dir=OUT)
     threading.Thread(target=asset_worker, args=(job_id,), daemon=True).start()
     return {"job": job_id, "names": names, "already_running": False}
 
@@ -265,7 +315,30 @@ def extract_result(name: str):
 def job_status(job_id: str, since: int = 0):
     job = jobs.get(job_id)
     if not job:
-        raise HTTPException(404, "That run isn't known to this server (it may have restarted).")
+        persisted = get_job_state(job_id, out_dir=OUT)
+        if not persisted:
+            raise HTTPException(404, "That run isn't known to this server (it may have restarted).")
+        events = persisted.get("events") or []
+        if isinstance(events, str):
+            try:
+                events = json.loads(events)
+            except Exception:
+                events = [events]
+        lines = events[since:]
+        return {
+            "status": persisted.get("status", "unknown"),
+            "lines": lines,
+            "next": since + len(lines),
+            "slug": persisted.get("slug") or persisted.get("tool") or "",
+            "tool": persisted.get("tool") or "",
+            "stage": persisted.get("stage", ""),
+            "elapsed": "restarted",
+            "drive": persisted.get("drive"),
+            "index": persisted.get("index"),
+            "total": persisted.get("total"),
+            "names": persisted.get("names"),
+            "results": persisted.get("results"),
+        }
     lines = job["log"][since:]
     stage = ""
     for ln in reversed(job["log"]):
@@ -735,6 +808,11 @@ def assemble_cut(slug: str):
         return {"ok": True, "rough_cut": url_for(d, "rough_cut.mp4")}
     except Exception as e:
         raise HTTPException(500, f"Assembler error: {e}")
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 # ---------- page ----------
