@@ -5,12 +5,14 @@ Optimized for 512 MB RAM environments (e.g. Render Free Tier):
 - Enforces lightweight launch flags: --no-sandbox, --disable-dev-shm-usage,
   --disable-gpu, --disable-extensions, --disable-background-networking.
 - Supports remote CDP browser via BROWSER_WS_URL environment variable.
+- Strips whitespace/quotes and validates ws:// or wss:// without exposing tokens.
 - Provides page.route hooks to abort heavy image/media/font requests.
 - Closes pages, contexts, and browsers safely in try/finally blocks.
 """
 
 import logging
 import os
+from urllib.parse import urlparse
 
 log = logging.getLogger("browser_utils")
 
@@ -23,14 +25,47 @@ CHROMIUM_ARGS = [
 ]
 
 
+def get_browser_ws_url():
+    """
+    Read and sanitize BROWSER_WS_URL.
+    Strips whitespace and surrounding single/double quotes.
+    Validates that the URL starts with 'ws://' or 'wss://'.
+    If invalid or non-websocket, prints a clear error without exposing secret tokens.
+    """
+    raw = os.environ.get("BROWSER_WS_URL")
+    if raw is None:
+        return None
+
+    # Strip whitespace and any surrounding quotes
+    val = raw.strip().strip("'\"").strip()
+    if not val:
+        return None
+
+    if not (val.startswith("wss://") or val.startswith("ws://")):
+        error_msg = "BROWSER_WS_URL is missing or invalid (must start with wss://)"
+        print(error_msg)
+        log.error(error_msg)
+        return None
+
+    return val
+
+
 def launch_or_connect(playwright, headed=False, extra_args=None):
     """
-    Launch Chromium with memory-saving flags, or connect to a remote CDP browser
-    if BROWSER_WS_URL is set in environment.
+    Unified browser opening helper for all pipeline stages (grab, script, trial, extract).
+    Connects to remote CDP browser if BROWSER_WS_URL is set, otherwise launches Chromium
+    with memory-saving flags. Never prints secret tokens in logs or console.
     """
-    ws_url = os.environ.get("BROWSER_WS_URL", "").strip()
+    ws_url = get_browser_ws_url()
     if ws_url:
-        log.info("Connecting to remote Playwright browser over CDP: %s", ws_url)
+        try:
+            # Mask sensitive token/query parameters in logs
+            parsed = urlparse(ws_url)
+            safe_target = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            log.info("Connecting to remote browser over CDP: %s", safe_target)
+            print(f"Connecting to remote browser via CDP ({safe_target})")
+        except Exception:
+            print("Connecting to remote browser via CDP")
         return playwright.chromium.connect_over_cdp(ws_url)
 
     args = list(CHROMIUM_ARGS)

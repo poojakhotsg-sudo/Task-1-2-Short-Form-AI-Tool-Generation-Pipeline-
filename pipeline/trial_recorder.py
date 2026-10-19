@@ -32,6 +32,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 from . import qa
+from .browser_utils import launch_or_connect, safe_close
 from .grabber import UA, H, W, VIEWPORT_W, VIEWPORT_H, bot_check, clean_page, clip_name, cut_clip, load_page, mobile_device, slugify
 from .script_gen import FORBIDDEN_STEP, MODEL
 
@@ -362,7 +363,7 @@ def trial_name(shot):
 def record_shot(p, shot, steps, start_url, auth_file, ua, clips_dir, client, headed):
     """Record one shot. Returns (clip_path, png_path, seconds); raises NeedsManual."""
     with tempfile.TemporaryDirectory() as tmp:
-        browser = p.chromium.launch(headless=not headed)
+        browser = launch_or_connect(p, headed=headed)
         dev = mobile_device(p)
         ctx = browser.new_context(storage_state=str(auth_file),
                                   **dev,
@@ -408,11 +409,7 @@ def record_shot(p, shot, steps, start_url, auth_file, ua, clips_dir, client, hea
             raise
         finally:
             video = page.video
-            try:
-                ctx.close()  # flushes the recording
-            except PlaywrightError:
-                pass
-            browser.close()
+            safe_close(page=page, context=ctx, browser=browser)
             webm = Path(video.path()) if video else None
         # Only reached when every step worked; a flagged shot's recording is dropped with tmp.
         if keep:

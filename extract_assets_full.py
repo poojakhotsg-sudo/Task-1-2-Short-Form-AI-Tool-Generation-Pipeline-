@@ -42,6 +42,7 @@ from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 from playwright.sync_api import sync_playwright
+from pipeline.browser_utils import launch_or_connect, safe_close
 
 try:
     from PIL import Image
@@ -515,7 +516,7 @@ def extract_assets(
         dev["is_mobile"] = True
         dev["has_touch"] = True
 
-        browser = p.chromium.launch(headless=not headed)
+        browser = launch_or_connect(p, headed=headed)
         browser_name = "chromium"
         try:
             browser_version = browser.version

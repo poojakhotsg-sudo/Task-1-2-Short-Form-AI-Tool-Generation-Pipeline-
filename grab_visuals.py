@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import sync_playwright
+from pipeline.browser_utils import launch_or_connect, safe_close
 
 W, H = 1080, 1920
 VIEWPORT_W, VIEWPORT_H = 390, 844
@@ -237,7 +238,7 @@ def record_session(url, n_clips, seconds, headed, workdir, network_videos, tool_
     """Run one browser session with video on; return (webm_path, [(start, end), ...], final_url)."""
     segments = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not headed)
+        browser = launch_or_connect(p, headed=headed)
         dev = mobile_device(p)
         ctx = browser.new_context(
             **dev,
@@ -382,7 +383,7 @@ def main():
 
     # Download page videos in a fresh, unrecorded session.
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch_or_connect(p)
         dev = mobile_device(p)
         page = browser.new_page(**dev)
         page.on("response", lambda r: network_videos.add(r.url)
