@@ -792,6 +792,17 @@ def extract_assets(
         dimensions = item.get("dimensions", {"width": 0, "height": 0})
         inline_svg = item.get("inline_svg_content")
 
+        # Ignore known advertising and analytics tracking beacons/pixels
+        TRACKER_DOMAINS = (
+            "bat.bing.com", "t.co", "google-analytics.com", "googletagmanager.com",
+            "doubleclick.net", "facebook.com/tr", "analytics.twitter.com",
+            "px.ads.linkedin.com", "adservice.google.com", "stats.wp.com",
+            "hotjar.com", "clarity.ms", "segment.io"
+        )
+        if any(td in raw_url for td in TRACKER_DOMAINS):
+            skipped_count += 1
+            continue
+
         # --- A. Inline SVGs ---
         if inline_svg:
             content_bytes = inline_svg.encode("utf-8")
