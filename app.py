@@ -35,7 +35,10 @@ import gallery
 from pipeline import qa
 from pipeline.grabber import H, W, slugify
 
+from dotenv import load_dotenv
+
 ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
 OUT = Path(os.environ.get("REEL_OUT_DIR") or ROOT / "out").resolve()  # override for testing
 OUT.mkdir(parents=True, exist_ok=True)
 DRIVE_RE = re.compile(r"https://drive\.google\.com/drive/folders/[\w-]+")
@@ -541,7 +544,11 @@ def download_zip(slug: str, background: BackgroundTasks):
 
 @app.get("/api/config")
 def get_config():
-    has_key = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip() or os.environ.get("GROK_API_KEY", "").strip())
+    has_key = bool(
+        os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        or os.environ.get("GROK_API_KEY", "").strip()
+        or os.environ.get("GROQ_API_KEY", "").strip()
+    )
     return {"has_ai_key": has_key}
 
 
@@ -701,7 +708,7 @@ def generate_ai_script(slug: str, url: str = Form("")):
     site = read_json(d / "site_data.json") or {}
     tool_url = url or site.get("url") or f"https://{slug}.com"
 
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROK_API_KEY")):
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROK_API_KEY") or os.environ.get("GROQ_API_KEY")):
         raise HTTPException(400, "No API key configured in .env.")
 
     from pipeline import matcher, script_gen
