@@ -13,5 +13,45 @@
     "price_tier": "free",
     "checkout_url": "",
     "comment_keyword": ""
+  },
+  "higgsfield.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
+  },
+  "captions.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
+  },
+  "veed.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
+  },
+  "invideo.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
+  },
+  "luma.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
+  },
+  "pika.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
+  },
+  "klingai.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
+  },
+  "runwayml.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
   }
 }
