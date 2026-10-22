@@ -21,8 +21,8 @@ from urllib.parse import quote
 from PIL import Image
 
 FACE_MODEL = Path(__file__).resolve().parent / "models" / "face_detection_yunet_2023mar.onnx"
-MEDIA_DIRS = ("assets", "gifs_videos", "images", "clips")
-EMBED_RE = re.compile(r"youtube\.com|youtube-nocookie\.com|youtu\.be|vimeo\.com|loom\.com|wistia\.(com|net)", re.I)
+MEDIA_DIRS = ("assets", "gifs_videos", "videos_gifs", "images", "clips", "embedded", "scroll", "svgs")
+EMBED_RE = re.compile(r"youtube\.com|youtube-nocookie\.com|youtu\.be|vimeo\.com|loom\.com|wistia\.(com|net)|supademo\.com|arcade\.software|storylane\.io|navattic\.com|vidyard\.com|streamable\.com|dailymotion\.com", re.I)
 YT_ID_RE = re.compile(r"(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?v=|shorts/)|youtu\.be/)([\w-]{11})")
 SCALE_RE = re.compile(r"[_@-]?[123]x$", re.I)  # hero_2x, hero@2x, hero-1x -> hero
 HASH_SUFFIX_RE = re.compile(r"-[0-9a-f]{8}$", re.I)  # imagine_3x-77cd08e5 -> imagine_3x
@@ -181,15 +181,30 @@ def build(d):
             elif a.get("type") == "embed":
                 embeds_link_only.append({**info, "url": a.get("source_url")})
     new = _read_json(d / "manifest.json")
+    items_list = []
     if isinstance(new, list):
-        for a in new:
-            meta[a["filename"]] = {"source_url": a.get("source_url"), "section": a.get("section"),
-                                   "order": a.get("page_position"), "page_y": a.get("page_y")}
-            if a.get("mp4"):
-                derived.add(a["mp4"])  # mp4 copy of an animated WebP/APNG: the original is the card
-        report = _read_json(d / "report.json") or {}
-        for e in report.get("failed_embeds") or []:
-            embeds_link_only.append({"url": e.get("url"), "source_url": e.get("url"), "section": None, "order": None})
+        items_list = new
+    elif isinstance(new, dict):
+        items_list = new.get("items", []) or new.get("library", [])
+    for a in items_list:
+        p_key = a.get("path") or a.get("filename")
+        info = {"source_url": a.get("source_url") or a.get("source URL"),
+                "section": a.get("section") or a.get("page_section"),
+                "order": a.get("page_order") or a.get("order") or a.get("page_position"),
+                "page_y": a.get("page_y"), "type": a.get("type")}
+        if p_key:
+            meta[Path(p_key).as_posix()] = info
+        if a.get("filename"):
+            meta[a["filename"]] = info
+        if a.get("mp4") and a.get("mp4") != a.get("path") and a.get("mp4") != a.get("filename"):
+            derived.add(a["mp4"])  # mp4 copy of an animated WebP/APNG: the original is the card
+
+    report = _read_json(d / "report.json") or {}
+    for e in report.get("failed_embeds") or report.get("embeds") or []:
+        url_val = e.get("url") or e.get("source_url") or (e if isinstance(e, str) else "")
+        if url_val and EMBED_RE.search(url_val):
+            if not any(m.get("source_url") == url_val and m.get("type") in ("embed", "embed_recording") for m in meta.values()):
+                embeds_link_only.append({"url": url_val, "source_url": url_val, "section": None, "order": None})
 
     # ---- every media file on disk, classified by header ----
     items = []
@@ -210,10 +225,15 @@ def build(d):
             animated = kind in ("gif", "image") and f["frames"] > 1
             if kind == "image" and animated:
                 kind = "gif"  # animated WebP / APNG / AVIF live with the GIFs
-            m = meta.get(rel, {})
+            m = meta.get(rel) or meta.get(p.name, {})
             src = m.get("source_url") or ""
-            if kind == "video" and EMBED_RE.search(src):
+            m_type = m.get("type")
+            if m_type in ("embed", "embed_recording") or (kind == "video" and EMBED_RE.search(src)):
                 kind = "embed"
+            elif m_type == "svg" or p.suffix.lower() == ".svg":
+                kind = "svg"
+            elif m_type == "gif" or (kind == "image" and animated):
+                kind = "gif"
             st = p.stat()
             items.append({
                 "id": rel, "tab": kind, "name": p.name, "url": _public(d, rel, st.st_mtime),
@@ -288,9 +308,9 @@ def _flags(d, it):
     name = Path(it["name"]).stem
     src_name = Path((it["source_url"] or "").split("?")[0]).stem
     w, h = it["width"] or 0, it["height"] or 0
-    if ICON_RE.search(name) or ICON_RE.search(src_name) or (it["tab"] in ("image", "svg") and 0 < max(w, h) < 96):
-        flags.append("icon")
     if it["tab"] == "image":
+        if ICON_RE.search(name) or ICON_RE.search(src_name) or (0 < max(w, h) < 96):
+            flags.append("icon")
         if DECOR_RE.search(name) or DECOR_RE.search(src_name):
             flags.append("background")
         squareish = h and 0.7 <= w / h <= 1.35

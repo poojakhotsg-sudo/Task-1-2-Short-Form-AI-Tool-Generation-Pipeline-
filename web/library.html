@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asset Library</title>
+<style>
+  :root {
+    --bg: #f5f5f2; --panel: #fff; --fg: #1c1c1a; --muted: #6b6b66; --line: #e3e3de; --soft: #f0f0ec;
+    --accent: #1c1c1a; --accent-fg: #fff;
+    --ok: #1a7f37; --ok-bg: #dcf5e3; --bad: #b42318; --bad-bg: #fde7e4; --warn: #8a5a00; --warn-bg: #fff1c2;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121211; --panel: #1b1b19; --fg: #ececE6; --muted: #9a9a92; --line: #2d2d2a; --soft: #232320;
+      --accent: #ececE6; --accent-fg: #121211;
+      --ok: #5fd38a; --ok-bg: #173723; --bad: #ff8f80; --bad-bg: #3d1a16; --warn: #f5c451; --warn-bg: #3a2f10;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: inherit; }
+  button, input, select { font: inherit; color: inherit; }
+  .wrap { max-width: 1440px; margin: 0 auto; padding: 0 16px; }
+
+  .topbar { position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .topbar .wrap { display: flex; gap: 10px; align-items: center; padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; }
+  .brand { font-weight: 700; margin-right: 6px; white-space: nowrap; text-decoration: none; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 9px;
+         border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg); cursor: pointer;
+         text-decoration: none; white-space: nowrap; font-size: 14px; }
+  .btn.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
+  .btn.small { padding: 5px 10px; font-size: 13px; }
+  .btn.buy { background: var(--warn); border-color: var(--warn); color: #fff; }
+  .btn.current { border-color: var(--fg); }
+  input, select { padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); min-width: 0; }
+  input:focus, select:focus, .btn:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+
+  main.wrap { padding-top: 18px; padding-bottom: 48px; }
+  .head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .head h1 { font-size: 22px; margin: 0; }
+  .muted { color: var(--muted); }
+  .tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 0 14px; margin-bottom: 16px;
+           border-bottom: 1px solid var(--line); font-size: 13px; }
+  .tools input[type=search] { flex: 1 1 240px; max-width: 380px; padding: 7px 10px; font-size: 13px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 99px; padding: 2px; gap: 2px; }
+  .seg button { border: 0; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: 99px; cursor: pointer; font-size: 13px; }
+  .seg button.active { background: var(--fg); color: var(--bg); }
+  .spacer { flex: 1; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
+          display: flex; flex-direction: column; min-width: 0; transition: transform .15s, border-color .15s; }
+  .card:hover { transform: translateY(-2px); border-color: var(--fg); }
+  .thumb { position: relative; aspect-ratio: 16/10; background: var(--soft); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .none { color: var(--muted); font-size: 13px; }
+  .badge { position: absolute; top: 8px; left: 8px; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+           text-transform: uppercase; letter-spacing: .04em; }
+  .badge.free { background: var(--ok-bg); color: var(--ok); }
+  .badge.paid { background: var(--warn-bg); color: var(--warn); }
+  .body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+  .name { font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .site { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; }
+  .site:hover { text-decoration: underline; }
+  .hook { font-size: 14px; margin: 2px 0 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .hook.missing { color: var(--muted); font-style: italic; }
+  .meta { font-size: 12px; color: var(--muted); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
+  .empty { grid-column: 1/-1; color: var(--muted); padding: 28px 14px; text-align: center; background: var(--soft); border-radius: 9px; }
+  .error-bar { background: var(--bad-bg); color: var(--bad); padding: 10px 14px; border-radius: 9px; margin-bottom: 14px; }
+  .views { display: flex; gap: 8px; margin-bottom: 4px; }
+  .tab-btn { border-radius: 99px; padding: 5px 12px; font-size: 13px; font-weight: 500; background: transparent;
+             color: var(--muted); border: 1px solid var(--line); cursor: pointer; }
+  .tab-btn:hover { color: var(--fg); border-color: var(--fg); }
+  .tab-btn.active { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 640px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; background: var(--soft); }
+  tr:last-child td { border-bottom: 0; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.num { text-align: right; }
+  .kw { font: 600 13px/1 ui-monospace, Consolas, monospace; background: var(--soft); border-radius: 6px; padding: 4px 8px; }
+  .dup { margin-left: 6px; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; background: var(--bad-bg); color: var(--bad); }
+  .link-cell { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .link-cell code { font: 12.5px/1.3 ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg);
+           padding: 9px 16px; border-radius: 9px; font-size: 14px; z-index: 20; }
+  @media (max-width: 520px) {
+    .grid { grid-template-columns: minmax(0, 1fr); }
+    .tools input[type=search] { max-width: none; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="/">Reel Pipeline</a>
+    <a class="btn ghost small" href="/">Pipeline</a>
+    <a class="btn ghost small current" href="/library" aria-current="page">Library</a>
+    <a class="btn ghost small" href="/extractor">Extractor</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="head">
+    <h1>Asset Library</h1>
+    <span id="count" class="muted"></span>
+  </div>
+  <div id="error" class="error-bar" hidden></div>
+  <div class="views" role="tablist" aria-label="Library view">
+    <button type="button" class="tab-btn" role="tab" data-view="tools">Tools</button>
+    <button type="button" class="tab-btn" role="tab" data-view="keywords">Keywords (<span id="kwCount">0</span>)</button>
+  </div>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search tools, hooks, sites or keywords" aria-label="Search the library">
+    <div class="seg" role="group" aria-label="Filter by price">
+      <button type="button" data-tier="all" class="active">All</button>
+      <button type="button" data-tier="free">Free</button>
+      <button type="button" data-tier="paid">Paid</button>
+    </div>
+    <span class="spacer"></span>
+    <span class="muted">Set Free/Paid and the checkout link on the Reel Kit form.</span>
+  </div>
+  <div id="grid" class="grid"><div class="empty">Loading…</div></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "text") el.textContent = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+// Only http(s) links from tools.json become hrefs; site links get the same check.
+const safeUrl = (u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch (e) { return null; } };
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+
+const S = { tools: [], keywords: [], tier: store.get("libraryTier") || "all",
+            view: store.get("libraryView") === "keywords" ? "keywords" : "tools" };
+
+function toast(msg) {
+  const t = h("div", { class: "toast", role: "status", text: msg });
+  document.body.append(t);
+  setTimeout(() => t.remove(), 1600);
+}
+
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => toast("Link copied"), () => toast("Copy failed"));
+    return;
+  }
+  const ta = h("textarea", {});
+  ta.value = text;
+  document.body.append(ta); ta.select();
+  try { document.execCommand("copy"); toast("Link copied"); } catch (e) { toast("Copy failed"); }
+  ta.remove();
+}
+
+function keywordRow(k) {
+  const copy = h("button", { class: "btn ghost small", type: "button", text: "Copy", "aria-label": `Copy the link for ${k.keyword}` });
+  copy.addEventListener("click", () => copyText(k.go_url));
+  const dest = { checkout: "Checkout", "lead magnet": "Lead magnet page", library: "Library (no lead magnet yet)" }[k.destination] || k.destination;
+  return h("tr", {},
+    h("td", {}, h("span", { class: "kw", text: k.keyword }),
+      k.duplicate ? h("span", { class: "dup", title: "Another tool uses this keyword; /go uses the first one in data/tools.json", text: "Duplicate" }) : null),
+    h("td", {}, h("div", { text: k.tool }), h("div", { class: "meta", text: `${k.tool_id} · ${k.price_tier === "paid" ? "Paid" : "Free"}` })),
+    h("td", {}, h("div", { class: "link-cell" }, h("code", { title: k.go_url, text: k.go_url }), copy)),
+    h("td", { text: dest }),
+    h("td", { class: "num", text: String(k.clicks) }));
+}
+
+function renderKeywords(q) {
+  const list = S.keywords.filter((k) => (S.tier === "all" || k.price_tier === S.tier)
+    && (!q || [k.keyword, k.tool, k.tool_id].some((s) => (s || "").toLowerCase().includes(q))));
+  $("count").textContent = list.length === S.keywords.length ? `${S.keywords.length} keywords` : `${list.length} of ${S.keywords.length} keywords`;
+  if (!list.length) {
+    return [h("div", { class: "empty", text: S.keywords.length ? "No keywords match the search or filter."
+      : "No comment keywords yet. Add one in the Reel Kit form on the Pipeline page." })];
+  }
+  return [h("div", { class: "table-wrap", style: "grid-column:1/-1" },
+    h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: "Keyword" }), h("th", { text: "Tool" }), h("th", { text: "Link" }),
+                                  h("th", { text: "Sends to" }), h("th", { class: "num", text: "Clicks" }))),
+      h("tbody", {}, ...list.map(keywordRow))))];
+}
+
+function card(t) {
+  const thumb = h("div", { class: "thumb" },
+    t.thumb ? h("img", { src: t.thumb, alt: `${t.name} screenshot`, loading: "lazy" }) : h("span", { class: "none", text: "No image extracted" }),
+    h("span", { class: `badge ${t.price_tier}`, text: t.price_tier === "paid" ? "Paid" : "Free" }));
+  const site = safeUrl(t.url);
+  const buy = t.price_tier === "paid"
+    ? (safeUrl(t.checkout_url) ? h("a", { class: "btn small buy", href: safeUrl(t.checkout_url), target: "_blank", rel: "noopener", text: "Buy" })
+                               : h("span", { class: "meta", text: "No checkout link set" }))
+    : null;
+  const actions = [
+    t.pdf ? h("a", { class: "btn small", href: t.pdf, download: `${t.slug}-lead-magnet.pdf`, text: "Download PDF" }) : null,
+    t.html ? h("a", { class: "btn ghost small", href: t.html, target: "_blank", rel: "noopener", text: "Open HTML" }) : null,
+    buy,
+  ];
+  if (!t.pdf && !t.html) actions.unshift(h("span", { class: "meta", text: "No lead magnet yet" }));
+  return h("article", { class: "card" }, thumb,
+    h("div", { class: "body" },
+      h("div", { class: "name", title: t.name, text: t.name }),
+      site ? h("a", { class: "site", href: site, target: "_blank", rel: "noopener", text: site.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "") }) : null,
+      t.hook ? h("p", { class: "hook", title: t.hook, text: `“${t.hook}”` }) : h("p", { class: "hook missing", text: "No hooks yet" }),
+      t.hook_count || t.lead_magnet_type
+        ? h("div", { class: "meta", text: [t.hook_count && `${t.hook_count} hooks`, t.lead_magnet_type].filter(Boolean).join(" · ") }) : null,
+      h("div", { class: "actions" }, ...actions)));
+}
+
+function render() {
+  const q = $("search").value.trim().toLowerCase();
+  for (const b of document.querySelectorAll(".views .tab-btn")) {
+    b.classList.toggle("active", b.dataset.view === S.view);
+    b.setAttribute("aria-selected", String(b.dataset.view === S.view));
+  }
+  $("kwCount").textContent = S.keywords.length;
+  for (const b of document.querySelectorAll(".seg button")) {
+    b.classList.toggle("active", b.dataset.tier === S.tier);
+    b.setAttribute("aria-pressed", String(b.dataset.tier === S.tier));
+  }
+  if (S.view === "keywords") {
+    $("grid").replaceChildren(...renderKeywords(q));
+    return;
+  }
+  const list = S.tools.filter((t) => (S.tier === "all" || t.price_tier === S.tier)
+    && (!q || [t.name, t.hook, t.url, t.slug].some((s) => (s || "").toLowerCase().includes(q))));
+  $("count").textContent = list.length === S.tools.length ? `${S.tools.length} tools` : `${list.length} of ${S.tools.length} tools`;
+  const grid = $("grid");
+  grid.replaceChildren(...(list.length ? list.map(card)
+    : [h("div", { class: "empty", text: S.tools.length ? "No tools match the search or filter." : "No tools processed yet. Run an extraction from the Pipeline page." })]));
+}
+
+async function getJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Could not load ${url} (${res.status})`);
+  return res.json();
+}
+
+async function load() {
+  const [lib, kws] = await Promise.allSettled([getJson("/api/library"), getJson("/api/keywords")]);
+  S.tools = lib.status === "fulfilled" ? lib.value.tools || [] : [];
+  S.keywords = kws.status === "fulfilled" ? kws.value.keywords || [] : [];
+  const errs = [lib, kws].filter((r) => r.status === "rejected").map((r) => r.reason.message);
+  $("error").textContent = errs.join(" · ");
+  $("error").hidden = !errs.length;
+  render();
+}
+
+$("search").addEventListener("input", render);
+for (const b of document.querySelectorAll(".views .tab-btn")) {
+  b.addEventListener("click", () => { S.view = b.dataset.view; store.set("libraryView", S.view); render(); });
+}
+for (const b of document.querySelectorAll(".seg button")) {
+  b.addEventListener("click", () => { S.tier = b.dataset.tier; store.set("libraryTier", S.tier); render(); });
+}
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+{
+  "url": "https://labs.google.com/pomelli",
+  "tool": "Pomelli Visual Gen",
+  "status": "ok",
+  "message": "",
+  "http_status": 200,
+  "attempts": [
+    {
+      "attempt": 1,
+      "headed": false,
+      "status": 200,
+      "error": null
+    }
+  ],
+  "counts": {
+    "videos_gifs": 2,
+    "images": 3
+  },
+  "empty_reasons": {
+    "scroll": "no scroll video was recorded"
+  },
+  "skipped": {
+    "under_5kb": 1,
+    "too_small_px": 0,
+    "favicon": 0,
+    "tracking_pixel": 0,
+    "svg": 3,
+    "not_media": 1,
+    "duplicate_sha256": 0,
+    "duplicate_phash": 0,
+    "convert_failed": 0
+  },
+  "found": {
+    "video_urls": 0,
+    "iframes": 2,
+    "video_iframes": 2,
+    "image_urls": 8
+  },
+  "failed_downloads": [],
+  "embeds": [
+    {
+      "url": "https://www.youtube.com/embed/rsWPISYv6tQ",
+      "resolved": "https://www.youtube.com/watch?v=rsWPISYv6tQ",
+      "result": "downloaded"
+    }
+  ],
+  "scroll_video": {
+    "error": null,
+    "section_clips": 0,
+    "blocked_by_bot_check": false
+  },
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Mobile/15E148 Safari/604.1",
+  "bot_check": false,
+  "console_errors": [],
+  "media_requests": [
+    {
+      "url": "https://www.gstatic.com/_/bettany/MjAyNjEwMTkuMDNfcDA/foundry_about%2Fassets/google_labs.svg",
+      "content_type": "image/svg+xml",
+      "status": 200,
+      "resource_type": "image"
+    },
+    {
+      "url": "https://www.gstatic.com/_/bettany/MjAyNjEwMTkuMDNfcDA/foundry_about%2Fassets/footer-google.svg",
+      "content_type": "image/svg+xml",
+      "status": 200,
+      "resource_type": "image"
+    },
+    {
+      "url": "https://www.gstatic.com/_/bettany/MjAyNjEwMTkuMDNfcDA/foundry_about%2Fassets/hero-top.png",
+      "content_type": "image/png",
+      "status": 200,
+      "resource_type": "image"
+    },
+    {
+      "url": "https://www.gstatic.com/_/bettany/MjAyNjEwMTkuMDNfcDA/foundry_about%2Fassets/hero-bottom.png",
+      "content_type": "image/png",
+      "status": 200,
+      "resource_type": "image"
+    },
+    {
+      "url": "https://www.youtube.com/generate_204?Q-oRiw",
+      "content_type": "",
+      "status": 204,
+      "resource_type": "image"
+    },
+    {
+      "url": "https://i.ytimg.com/vi_webp/rsWPISYv6tQ/maxresdefault.webp",
+      "content_type": "image/webp",
+      "status": 200,
+      "resource_type": "image"
+    },
+    {
+      "url": "https://www.gstatic.com/youtube/img/icons/mweb/youtube_fill/logo/v2/67px.svg",
+      "content_type": "image/svg+xml",
+      "status": 200,
+      "resource_type": "fetch"
+    },
+    {
+      "url": "https://yt3.ggpht.com/bAseQlKvNmjdLQrvYWm_q3QDp8C8YKyYI-nYJewgOkPi0JU1_3X9oFgjrEdzkOlXzLGFxFbnsw=s68-c-k-c0x00ffffff-no-rj",
+      "content_type": "image/jpeg",
+      "status": 200,
+      "resource_type": "image"
+    }
+  ],
+  "seconds": 52.9,
+  "finished": "2026-10-21 13:19:11"
+}

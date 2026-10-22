@@ -60,6 +60,11 @@ def run_pipeline(url, tool, stages=DEFAULT_STAGES, out_root="out", log=print, di
         m = grabber.grab(url, slug, out_root, headed=headed)
         if m["status"] != "ok":
             raise RuntimeError(f"grab {m['status']}: {m['error']}")
+        try:
+            from extract_assets import extract as run_extract_assets
+            run_extract_assets(url, tool_dir / "assets", tool=display_name or tool)  # own manifest.json, never the pipeline's
+        except Exception as e:
+            log(f"  [warn] extract_assets error: {e}")
         lib = m["library"]
         ok = sum(c.get("qa") == "pass" for c in lib)
         return (f"{len(lib)} section clips & segments ({ok} pass QA), "

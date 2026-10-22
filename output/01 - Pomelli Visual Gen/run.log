@@ -1,0 +1,34 @@
+13:18:18 INFO > Opening https://labs.google.com/pomelli
+13:18:25 INFO attempt 1: HTTP 200
+13:18:27 INFO > Scrolling the page
+13:18:30 INFO scrolled 4 steps
+13:18:30 INFO clicked 0 tabs/arrows/show-more
+13:18:30 INFO scrolled 0 nested scrollers
+13:18:30 INFO found 10 media URLs (8 in the page, 2 from network only)
+13:18:31 INFO > Downloading 8 files
+13:18:31 INFO downloaded 8 of 8 (0 failed)
+13:18:31 INFO > Downloading embed https://www.youtube.com/watch?v=rsWPISYv6tQ
+13:18:31 DEBUG yt-dlp warning: Deprecated Feature: Support for Python version 3.10 has been deprecated. Please update to Python 3.11 or above
+13:18:31 DEBUG yt-dlp error: Deprecated Feature: Support for Python version 3.10 has been deprecated. Please update to Python 3.11 or above
+13:18:31 DEBUG yt-dlp: [youtube] Extracting URL: https://www.youtube.com/watch?v=rsWPISYv6tQ
+13:18:31 DEBUG yt-dlp: [youtube] rsWPISYv6tQ: Downloading webpage
+13:18:33 DEBUG yt-dlp: [youtube] rsWPISYv6tQ: Downloading visionos player API JSON
+13:18:33 DEBUG yt-dlp: [youtube] rsWPISYv6tQ: Downloading m3u8 information
+13:18:33 DEBUG yt-dlp: [info] rsWPISYv6tQ: Downloading 1 format(s): 399+140
+13:18:33 DEBUG yt-dlp: [download] Destination: C:\Users\sgshr\Downloads\Adrian\week 10\reel-pipeline\output\01 - Pomelli Visual Gen\.staging\e000.f399.mp4
+13:18:34 DEBUG yt-dlp: [download] Download completed
+13:18:34 DEBUG yt-dlp: [download] Destination: C:\Users\sgshr\Downloads\Adrian\week 10\reel-pipeline\output\01 - Pomelli Visual Gen\.staging\e000.f140.m4a
+13:18:34 DEBUG yt-dlp: [download] Download completed
+13:18:34 DEBUG yt-dlp: [Merger] Merging formats into "C:\Users\sgshr\Downloads\Adrian\week 10\reel-pipeline\output\01 - Pomelli Visual Gen\.staging\e000.mp4"
+13:18:34 DEBUG yt-dlp: Deleting original file C:\Users\sgshr\Downloads\Adrian\week 10\reel-pipeline\output\01 - Pomelli Visual Gen\.staging\e000.f399.mp4 (pass -k to keep)
+13:18:34 DEBUG yt-dlp: Deleting original file C:\Users\sgshr\Downloads\Adrian\week 10\reel-pipeline\output\01 - Pomelli Visual Gen\.staging\e000.f140.m4a (pass -k to keep)
+13:18:34 INFO > Recording scroll video
+13:18:34 INFO scroll attempt [headless] headed=False storage=False
+13:18:38 INFO bot check clear: title='Pomelli by Google Labs' heading=H1:'Pomelli' structure=True text_len=129
+13:18:38 INFO scroll [headless]: real page loaded ✓
+13:18:38 INFO mobile screenshot saved → mobile_check.png
+13:18:53 INFO scroll: page 514px, move 11.0s, 0 pauses
+13:18:53 INFO > Recording 0 section clips
+13:18:53 DEBUG recording clock factor 1.007
+13:18:57 INFO > Sorting files
+13:19:11 INFO done in 53s: videos_gifs 2, images 3

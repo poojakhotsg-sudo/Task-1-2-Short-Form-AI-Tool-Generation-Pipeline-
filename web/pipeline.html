@@ -212,6 +212,45 @@
   .g-meta { display:flex; gap:5px; flex-wrap:wrap; }
   .g-meta span { background:var(--soft); border-radius:5px; padding:1px 6px; }
   .g-empty { grid-column:1/-1; color:var(--muted); padding:28px 14px; text-align:center; background:var(--soft); border-radius:9px; }
+
+  /* Reel Kit tabs (Hooks, Lead Magnet) */
+  .kit-opts { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:-4px 0 12px; font-size:13px; }
+  .kit-opts select, .kit-opts input[type=text] { padding:6px 8px; font-size:13px; }
+  .kit-opts label { display:flex; align-items:center; gap:6px; color:var(--muted); cursor:pointer; white-space:nowrap; }
+  .kit-view { grid-column:1/-1; display:flex; flex-direction:column; gap:10px; }
+  .kit-hook { display:flex; gap:12px; align-items:flex-start; padding:12px 14px; background:var(--panel);
+              border:1px solid var(--line); border-radius:9px; }
+  .kit-hook .kit-body { flex:1; min-width:0; }
+  .kit-hook .kit-text { font-size:15px; font-weight:600; margin:0 0 4px; }
+  .kit-hook .kit-tpl { font-size:12px; color:var(--muted); }
+  .kit-bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .kit-frame { width:100%; height:72vh; border:1px solid var(--line); border-radius:9px; background:#fff; }
+
+  /* Preview player (9:16) */
+  .pv-overlay { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:100; display:flex; align-items:center;
+                justify-content:center; padding:16px; }
+  .pv-box { display:flex; flex-direction:column; gap:10px; width:min(360px, 100%, calc((100vh - 140px) * 9 / 16)); }
+  .pv-stage { position:relative; width:100%; aspect-ratio:9/16; background:#141413; border-radius:12px; overflow:hidden;
+              box-shadow:0 10px 40px rgba(0,0,0,.7); }
+  .pv-stage video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
+  .pv-blank { position:absolute; inset:0; display:grid; place-items:center; padding:24px; text-align:center;
+              background:#141413; color:#8d8d86; font-size:14px; }
+  .pv-num { position:absolute; top:10px; left:10px; font-size:12px; font-weight:700; padding:2px 8px; border-radius:6px;
+            background:rgba(0,0,0,.6); color:#fff; }
+  .pv-cap { position:absolute; left:0; right:0; bottom:0; padding:48px 18px 24px; text-align:center; color:#fff;
+            font-size:16px; font-weight:600; line-height:1.35; text-shadow:0 1px 3px rgba(0,0,0,.9);
+            background:linear-gradient(transparent, rgba(0,0,0,.8)); }
+  .pv-msg { position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center; gap:10px; padding:28px;
+            text-align:center; color:#e6e6e1; font-size:14px; }
+  .pv-msg b { font-size:16px; }
+  .pv-bar { display:flex; gap:3px; }
+  .pv-seg { flex:1 1 0; height:6px; padding:0; border:0; border-radius:99px; background:rgba(255,255,255,.25);
+            overflow:hidden; cursor:pointer; }
+  .pv-seg i { display:block; height:100%; width:0; background:#fff; }
+  .pv-controls { display:flex; gap:8px; align-items:center; color:#fff; font-size:13px; }
+  .pv-controls .btn { background:#fff; color:#141413; border-color:#fff; }
+  .pv-controls .btn.ghost { background:transparent; color:#fff; border-color:rgba(255,255,255,.35); }
+  .pv-label { margin-left:auto; font-variant-numeric:tabular-nums; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -221,6 +260,7 @@
 <header class="topbar">
   <div class="wrap">
     <span class="brand">Reel Pipeline</span>
+    <a href="/library" class="btn ghost small" style="text-decoration:none;" title="Every tool's hooks and lead magnet">Library</a>
     <a href="/extractor" class="btn ghost small" style="text-decoration:none;margin-right:6px;" title="Open standalone Asset Extractor">Extractor</a>
     <form id="runForm" autocomplete="off">
       <input id="tool" name="tool" placeholder="Tool name, e.g. Pomelli" required maxlength="60" aria-label="Tool name">
@@ -265,6 +305,31 @@
         <input type="checkbox" id="assetHeaded" style="width:14px;height:14px;"> Show browser
       </label>
     </div>
+    <div class="kit-opts">
+      <select id="kitDemoType" aria-label="Demo type (optional)">
+        <option value="">Demo type (optional)</option>
+        <option value="1 use case end to end">1 use case end to end</option>
+        <option value="3 core features">3 core features</option>
+      </select>
+      <input id="kitKeyword" type="text" maxlength="30" placeholder="Comment keyword, e.g. GUIDE" aria-label="Comment keyword (optional)">
+      <select id="kitMagnetType" aria-label="Lead magnet type (optional)">
+        <option value="">Lead magnet type (optional)</option>
+        <option value="checklist">Checklist</option>
+        <option value="playbook">Playbook</option>
+        <option value="step-by-step guide">Step-by-step guide</option>
+      </select>
+      <label title="After extraction, write hooks.json and a lead magnet (HTML + PDF) using Groq">
+        <input type="checkbox" id="kitEnabled" checked style="width:14px;height:14px;"> Generate Reel Kit after extraction
+      </label>
+      <select id="kitPriceTier" aria-label="Price tier in the Asset Library" title="Price tier shown in the Asset Library">
+        <option value="free">Free</option>
+        <option value="paid">Paid</option>
+      </select>
+      <input id="kitCheckout" type="text" inputmode="url" style="flex:0 1 230px;" placeholder="Checkout URL (paid only)"
+             aria-label="Checkout URL for paid tools">
+    </div>
+    <div id="kitKeywordWarn" role="status" hidden
+         style="margin:-4px 0 12px;padding:8px 12px;border-radius:9px;background:var(--warn-bg);color:var(--warn);font-size:13px;"></div>
 
     <!-- Live progress indicator -->
     <div id="assetProgressBox" style="margin-top: 10px; margin-bottom: 12px; padding: 12px 14px; background: var(--soft); border-radius: 9px; display: flex; flex-direction: column; gap: 8px;" hidden>
@@ -289,6 +354,8 @@
         <button class="tab-btn" data-tab="embed" type="button" role="tab">Embeds (<span data-count="embed">0</span>)</button>
         <button class="tab-btn" data-tab="svg" type="button" role="tab">SVGs (<span data-count="svg">0</span>)</button>
         <button class="tab-btn" data-tab="all" type="button" role="tab">All (<span data-count="all">0</span>)</button>
+        <button class="tab-btn" data-tab="hooks" type="button" role="tab">Hooks (<span data-count="hooks">0</span>)</button>
+        <button class="tab-btn" data-tab="magnet" type="button" role="tab">Lead Magnet</button>
         <span class="spacer"></span>
         <span id="galleryStats" class="muted" style="font-size:13px;"></span>
         <a id="openGalleryBtn" class="btn ghost small" href="#" target="_blank" rel="noopener">Open standalone gallery ↗</a>
@@ -337,7 +404,8 @@
       </div>
       <div class="right">
         <section class="panel">
-          <h2>Shot list <span class="spacer"></span><span class="muted" id="shotNote" style="font-weight:400;font-size:13px"></span></h2>
+          <h2>Shot list <span class="spacer"></span><span class="muted" id="shotNote" style="font-weight:400;font-size:13px"></span>
+            <button class="btn small" id="previewBtn" type="button" title="Play the shot list as a 9:16 reel">&#9654; Preview</button></h2>
           <div id="shots"></div>
         </section>
       </div>
@@ -447,11 +515,31 @@ $("runForm").addEventListener("submit", async (e) => {
 $("tool").addEventListener("input", (e) => { $("assetTool").value = e.target.value; });
 $("url").addEventListener("input", (e) => { $("assetUrl").value = e.target.value; });
 $("assetTool").addEventListener("input", (e) => { $("tool").value = e.target.value; });
+// A new tool name starts from Free with no checkout link (openTool fills them back in for an existing tool).
+for (const id of ["tool", "assetTool"]) {
+  $(id).addEventListener("input", () => { $("kitPriceTier").value = "free"; $("kitCheckout").value = ""; });
+}
+
+// Comment keywords must be unique across tools (they pick the /go/<KEYWORD> link); warn while typing.
+let kwTimer = null;
+async function checkKeyword() {
+  const warn = $("kitKeywordWarn");
+  const keyword = $("kitKeyword").value.trim();
+  if (!keyword) { warn.hidden = true; return; }
+  const q = new URLSearchParams({ keyword, tool: ($("assetTool").value || $("tool").value).trim(),
+                                  url: ($("assetUrl").value || $("url").value).trim() });
+  let r;
+  try { r = await api(`/api/keyword-check?${q}`); } catch (e) { return; }
+  if (r.keyword !== keyword.toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 30)) return;  // stale reply
+  warn.hidden = !r.conflict;
+  if (r.conflict) warn.textContent = `⚠️ The keyword "${r.keyword}" is already used by ${r.conflict.name} (${r.conflict.tool_id}). `
+    + "Each tool needs its own keyword, so extraction won't start until you pick another one.";
+}
+const queueKeywordCheck = () => { clearTimeout(kwTimer); kwTimer = setTimeout(checkKeyword, 300); };
+for (const id of ["kitKeyword", "assetTool", "tool", "assetUrl", "url"]) $(id).addEventListener("input", queueKeywordCheck);
 $("assetUrl").addEventListener("input", (e) => { $("url").value = e.target.value; });
 
 async function runExtractionHandler() {
-  location.href = "/";  // extraction lives on the main page now
-  return;
   $("formError").hidden = true;
   const tool = ($("assetTool").value || $("tool").value).trim();
   const url = ($("assetUrl").value || $("url").value).trim();
@@ -481,6 +569,12 @@ async function runExtractionHandler() {
     fd.append("tool", tool);
     fd.append("url", url);
     fd.append("headed", $("assetHeaded").checked ? "1" : "0");
+    fd.append("reel_kit", $("kitEnabled").checked ? "1" : "0");
+    fd.append("demo_type", $("kitDemoType").value);
+    fd.append("comment_keyword", $("kitKeyword").value.trim());
+    fd.append("lead_magnet_type", $("kitMagnetType").value);
+    fd.append("price_tier", $("kitPriceTier").value);
+    fd.append("checkout_url", $("kitCheckout").value.trim());
     const r = await api("/api/extract-assets", { method: "POST", body: fd });
     if (r.already_running) toast("Extraction already in progress for this tool");
     attachAssetJob(r.job, tool, r.slug);
@@ -531,6 +625,8 @@ function attachAssetJob(jobId, toolName, slug) {
           const pct = Math.min(95, Math.round((cur / tot) * 80) + 15);
           $("assetProgressBar").style.width = `${pct}%`;
         }
+      } else if (/Reel Kit|page text|hooks|lead magnet/i.test(r.stage)) {
+        $("assetProgressBar").style.width = "92%";
       } else if (r.stage.includes("Scrolling")) {
         $("assetProgressBar").style.width = "25%";
       } else if (r.stage.includes("Extracting")) {
@@ -544,10 +640,15 @@ function attachAssetJob(jobId, toolName, slug) {
     }
 
     $("assetProgressBar").style.width = "100%";
-    $("assetProgressText").textContent = r.status === "done" ? "Extraction complete!" : `Finished: ${r.status}`;
+    const kitRes = (r.results || []).find((x) => x.reel_kit);
+    const kitFailed = kitRes && kitRes.reel_kit !== "ok";
+    $("assetProgressText").textContent = r.status !== "done" ? `Finished: ${r.status}`
+      : !kitRes ? "Extraction complete!"
+      : kitFailed ? `Extraction complete. Reel Kit ${kitRes.reel_kit}: ${kitRes.reel_kit_error || "extraction failed"}`
+      : "Extraction and Reel Kit complete!";
     $("runExtractBtn").disabled = false;
     $("extractBtn").disabled = false;
-    setTimeout(() => { $("assetProgressBox").hidden = true; }, 2500);
+    if (!kitFailed) setTimeout(() => { $("assetProgressBox").hidden = true; }, 2500);
 
     await refreshTools(r.slug);
     openTool(r.slug);
@@ -616,6 +717,12 @@ async function openTool(slug) {
     $("url").value = d.url;
     $("assetUrl").value = d.url;
   }
+  if (d.meta) {  // this tool's Library settings, so a re-run doesn't reset them
+    $("kitPriceTier").value = d.meta.price_tier || "free";
+    $("kitCheckout").value = d.meta.checkout_url || "";
+    $("kitKeyword").value = d.meta.comment_keyword || "";
+    checkKeyword();
+  }
 
   renderHead(d);
   renderAssets(d);
@@ -655,10 +762,10 @@ const fmtBytes = (n) => !n ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 10
 const fmtDur = (s) => s == null ? "" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 const fmtDims = (it) => it.width && it.height ? `${it.width}×${it.height}` : "";
 
-function passesFilters(it) {
+function passesFilters(it, forTab = G.tab) {
   const q = $("gSearch").value.trim().toLowerCase();
   if (q && !it.name.toLowerCase().includes(q)) return false;
-  if ($("gUseful").checked && it.flags.length) return false;
+  if ($("gUseful").checked && forTab !== "svg" && it.flags.length) return false;
   if ($("gHideSmall").checked && it.tab === "image" && it.size < SMALL_BYTES) return false;
   return true;
 }
@@ -677,8 +784,21 @@ const visibleItems = () => sorted(G.items.filter((it) => inTab(it, G.tab) && pas
 function renderAssets(d) {
   G.items = d.gallery || [];
   G.slug = d.slug;
+  G.kit = d.reel_kit || {};
   G.selected.clear();
+  const hooks = (G.kit.hooks && G.kit.hooks.hooks) || [];
+  const hasKit = hooks.length > 0 || !!G.kit.lead_magnet_html;
   const galleryBox = $("assetGalleryUI");
+  if (!G.items.length && hasKit) {
+    galleryBox.hidden = false;
+    $("openGalleryBtn").hidden = true;
+    $("galleryStats").textContent = "";
+    $("assetStatusBadge").textContent = "Reel Kit ready";
+    G.tab = hooks.length ? "hooks" : "magnet";
+    renderAssetGrid();
+    renderFailedDownloads(d.failed_downloads);
+    return;
+  }
   if (!G.items.length) {
     galleryBox.hidden = true;
     $("assetStatusBadge").textContent = "No assets extracted yet";
@@ -698,12 +818,29 @@ function renderAssets(d) {
 
 function renderAssetGrid() {
   for (const t of [...TABS, "all"]) {
-    const n = G.items.filter((it) => inTab(it, t) && passesFilters(it)).length;
+    const n = G.items.filter((it) => inTab(it, t) && passesFilters(it, t)).length;
     document.querySelector(`[data-count="${t}"]`).textContent = n;
     const btn = document.querySelector(`.tab-btn[data-tab="${t}"]`);
     btn.classList.toggle("empty-tab", n === 0);
     btn.classList.toggle("active", t === G.tab);
     btn.setAttribute("aria-selected", String(t === G.tab));
+  }
+  const kit = G.kit || {};
+  const hooks = (kit.hooks && kit.hooks.hooks) || [];
+  $("assetGalleryUI").querySelector('[data-count="hooks"]').textContent = hooks.length;
+  for (const t of KIT_TABS) {
+    const btn = document.querySelector(`.tab-btn[data-tab="${t}"]`);
+    btn.classList.toggle("empty-tab", t === "hooks" ? !hooks.length : !kit.lead_magnet_html);
+    btn.classList.toggle("active", t === G.tab);
+    btn.setAttribute("aria-selected", String(t === G.tab));
+  }
+  const isKit = KIT_TABS.includes(G.tab);
+  document.querySelector("#assetGalleryUI .g-tools").hidden = isKit;
+  if (isKit) {
+    const grid = $("assetGridUI");
+    grid.classList.remove("compact");
+    fill(grid, G.tab === "hooks" ? hooksView(kit) : magnetView(kit));
+    return;
   }
   $("gSmallWrap").hidden = !(G.tab === "image" || G.tab === "all");
 
@@ -718,6 +855,52 @@ function renderAssetGrid() {
     fill(grid, ...list.map(card));
   }
   syncSelection();
+}
+
+// ---------- Reel Kit tabs ----------
+const KIT_TABS = ["hooks", "magnet"];
+
+function copyText(text) {
+  const done = () => toast("Copied");
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done, () => toast("Copy failed"));
+    return;
+  }
+  const ta = h("textarea", {});
+  ta.value = text;
+  document.body.append(ta); ta.select();
+  try { document.execCommand("copy"); done(); } catch (e) { toast("Copy failed"); }
+  ta.remove();
+}
+
+function hooksView(kit) {
+  const data = kit.hooks || {};
+  const hooks = data.hooks || [];
+  if (!hooks.length) {
+    return h("div", { class: "g-empty", text: "No hooks yet. Run extraction with \"Generate Reel Kit after extraction\" ticked." });
+  }
+  const row = (text, label) => h("div", { class: "kit-hook" },
+    h("div", { class: "kit-body" }, h("p", { class: "kit-text", text }), h("div", { class: "kit-tpl", text: label })),
+    (() => { const b = h("button", { class: "btn ghost small", type: "button", text: "Copy" });
+             b.addEventListener("click", () => copyText(text)); return b; })());
+  const info = [data.demo_type && `Demo: ${data.demo_type}`, data.lead_magnet_type && `Lead magnet: ${data.lead_magnet_type}`,
+                data.generated && `Generated ${data.generated}`].filter(Boolean).join(" · ");
+  return h("div", { class: "kit-view" },
+    info ? h("div", { class: "muted", style: "font-size:13px", text: info }) : null,
+    ...hooks.map((x, i) => row(x.hook, `Hook ${i + 1} · Template: ${x.template}`)),
+    data.cta ? row(data.cta, "Comment CTA") : null);
+}
+
+function magnetView(kit) {
+  if (!kit.lead_magnet_html) {
+    return h("div", { class: "g-empty", text: "No lead magnet yet. Run extraction with \"Generate Reel Kit after extraction\" ticked." });
+  }
+  return h("div", { class: "kit-view" },
+    h("div", { class: "kit-bar" },
+      kit.lead_magnet_pdf ? h("a", { class: "btn small", href: kit.lead_magnet_pdf, download: `${G.slug}-lead-magnet.pdf`, text: "Download PDF" })
+                          : h("span", { class: "muted", text: "PDF not created (see the job log)" }),
+      h("a", { class: "btn ghost small", href: kit.lead_magnet_html, target: "_blank", rel: "noopener", text: "Open HTML ↗" })),
+    h("iframe", { class: "kit-frame", src: kit.lead_magnet_html, title: "Lead magnet preview", sandbox: "" }));
 }
 
 function syncSelection() {
@@ -1014,6 +1197,153 @@ function renderShots(d) {
     h("thead", {}, h("tr", {}, ["#", "Script line", "Visual needed", "Source", "Clip", "Score", "Status", "Reason"].map((t) => h("th", { text: t })))),
     h("tbody", {}, rows))));
 }
+
+// ---------- preview player ----------
+// Plays the shot list in order in a 9:16 frame, from files already on disk (no API calls).
+// A clock drives the shots so each lasts its duration: short clips loop, long ones are cut off.
+const PV = { el: null, shots: [], vids: new Map(), i: -1, t: 0, total: 0, playing: false, last: 0, raf: 0 };
+const PV_FALLBACK_SECONDS = 3;  // a shot with no duration in the shot list or manifest
+const fmtClock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+function openPreview() {
+  const d = state.data;
+  if (!d) return;
+  closePreview();
+  const stage = h("div", { class: "pv-stage" });
+  const box = h("div", { class: "pv-box" }, stage);
+  PV.el = h("div", { class: "pv-overlay", role: "dialog", "aria-modal": "true", "aria-label": `Preview of ${d.tool}`,
+                     onclick: (e) => { if (e.target === PV.el) closePreview(); } },
+    h("button", { class: "modal-close", type: "button", "aria-label": "Close preview", text: "×", onclick: closePreview }), box);
+  document.body.append(PV.el);
+
+  const missing = [!d.script && "script.txt", !d.shots.length && "shot list"].filter(Boolean);
+  if (missing.length) {
+    stage.append(h("div", { class: "pv-msg" },
+      h("b", { text: `Nothing to preview yet: ${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} missing for ${d.tool}.` }),
+      h("span", { text: "Run the pipeline for this tool first (Run Pipeline at the top), then open Preview again." })));
+    return;
+  }
+
+  let start = 0;
+  PV.shots = d.shots.map((r) => {
+    const dur = Number(r.duration) > 0 ? Number(r.duration) : PV_FALLBACK_SECONDS;
+    const s = { line: r.script_line || "", clip: r.preview_clip || null, dur, start };
+    start += dur;
+    return s;
+  });
+  PV.total = start;
+  for (const s of PV.shots) {  // one <video> per distinct clip, preloaded, so shot changes don't flash black
+    if (!s.clip || PV.vids.has(s.clip)) continue;
+    const v = h("video", { src: s.clip, muted: true, loop: true, playsinline: true, preload: "auto", hidden: true });
+    v.muted = true;
+    v.addEventListener("error", () => {  // a clip that won't load counts as no clip
+      v.dataset.failed = "1";
+      const cur = PV.shots[PV.i];
+      if (cur && cur.clip === s.clip) enterShot(PV.i, PV.t - cur.start);
+    });
+    PV.vids.set(s.clip, v);
+    stage.append(v);
+  }
+  PV.blank = h("div", { class: "pv-blank", text: "No clip generated for this section", hidden: true });
+  PV.num = h("span", { class: "pv-num" });
+  PV.cap = h("div", { class: "pv-cap" });
+  stage.append(PV.blank, PV.num, PV.cap);
+  PV.segs = PV.shots.map((s, k) => h("button", { class: "pv-seg", type: "button", style: `flex-grow:${s.dur}`,
+    "aria-label": `Jump to shot ${k + 1}`, onclick: () => seekPreview(s.start) }, h("i")));
+  PV.playBtn = h("button", { class: "btn small", type: "button", onclick: togglePreview });
+  PV.label = h("span", { class: "pv-label" });
+  box.append(h("div", { class: "pv-bar" }, PV.segs),
+    h("div", { class: "pv-controls" }, PV.playBtn,
+      h("button", { class: "btn small ghost", type: "button", text: "Restart", onclick: () => { seekPreview(0); playPreview(); } }),
+      PV.label));
+  seekPreview(0);
+  playPreview();
+  PV.playBtn.focus();
+}
+
+function currentVid() {
+  const s = PV.shots[PV.i], v = s && s.clip && PV.vids.get(s.clip);
+  return v && !v.dataset.failed ? v : null;
+}
+
+function enterShot(i, offset) {
+  PV.i = i;
+  const v = currentVid();
+  for (const o of PV.vids.values()) if (o !== v) { o.pause(); o.hidden = true; }
+  PV.blank.hidden = !!v;
+  if (v) {
+    v.hidden = false;
+    try { v.currentTime = v.duration > 0 ? offset % v.duration : offset; } catch (e) {}
+    if (PV.playing) { const p = v.play(); if (p) p.catch(() => {}); }
+  }
+  PV.num.textContent = `${i + 1} / ${PV.shots.length}`;
+  PV.cap.textContent = PV.shots[i].line || "(no script line for this shot)";
+}
+
+function renderPreview() {
+  PV.segs.forEach((seg, k) => {
+    const s = PV.shots[k];
+    seg.firstChild.style.width = `${Math.min(1, Math.max(0, (PV.t - s.start) / s.dur)) * 100}%`;
+  });
+  PV.label.textContent = `Shot ${PV.i + 1} of ${PV.shots.length} · ${fmtClock(PV.t)} / ${fmtClock(PV.total)}`;
+  PV.playBtn.textContent = PV.playing ? "Pause" : PV.t >= PV.total ? "Play again" : "Play";
+}
+
+function seekPreview(t) {
+  PV.t = Math.min(Math.max(t, 0), PV.total);
+  let i = PV.shots.length - 1;
+  while (i > 0 && PV.shots[i].start > PV.t) i--;
+  enterShot(i, PV.t - PV.shots[i].start);
+  PV.last = performance.now();
+  renderPreview();
+}
+
+function tickPreview(now) {
+  PV.raf = 0;
+  if (!PV.playing || !PV.el) return;
+  PV.t += Math.min(now - PV.last, 250) / 1000;  // cap the step so a background tab doesn't skip shots
+  PV.last = now;
+  if (PV.t >= PV.total) { PV.t = PV.total; pausePreview(); return; }
+  const cur = PV.shots[PV.i];
+  if (PV.t >= cur.start + cur.dur) enterShot(PV.i + 1, PV.t - PV.shots[PV.i + 1].start);
+  renderPreview();
+  PV.raf = requestAnimationFrame(tickPreview);
+}
+
+function playPreview() {
+  if (!PV.el || !PV.shots.length) return;
+  if (PV.t >= PV.total) seekPreview(0);
+  PV.playing = true;
+  PV.last = performance.now();
+  const v = currentVid();
+  if (v) { const p = v.play(); if (p) p.catch(() => {}); }
+  if (!PV.raf) PV.raf = requestAnimationFrame(tickPreview);
+  renderPreview();
+}
+
+function pausePreview() {
+  PV.playing = false;
+  const v = currentVid();
+  if (v) v.pause();
+  renderPreview();
+}
+
+const togglePreview = () => (PV.playing ? pausePreview() : playPreview());
+
+function closePreview() {
+  if (!PV.el) return;
+  cancelAnimationFrame(PV.raf);
+  for (const v of PV.vids.values()) { v.pause(); v.removeAttribute("src"); v.load(); }  // stop the downloads
+  PV.el.remove();
+  Object.assign(PV, { el: null, shots: [], vids: new Map(), i: -1, t: 0, total: 0, playing: false, raf: 0 });
+}
+
+$("previewBtn").addEventListener("click", openPreview);
+window.addEventListener("keydown", (e) => {
+  if (!PV.el) return;
+  if (e.key === "Escape") closePreview();
+  else if (e.key === " " && PV.shots.length && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); togglePreview(); }
+});
 
 // ---------- upload ----------
 function pickFile(shot) {

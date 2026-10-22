@@ -4,6 +4,10 @@ auth_*.json
 credentials.json
 token.json
 
+# personal data from /api/subscribe and /go links
+data/subscribers.csv
+data/clicks.csv
+
 # generated media
 out/
 

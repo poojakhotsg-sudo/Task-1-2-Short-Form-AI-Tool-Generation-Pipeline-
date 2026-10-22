@@ -1,0 +1,17 @@
+{
+  "genspark.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": "GUIDE"
+  },
+  "gamma.assets": {
+    "price_tier": "paid",
+    "checkout_url": "https://example.com/checkout/gamma-kit",
+    "comment_keyword": "GAMMA"
+  },
+  "heygen.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
+  }
+}

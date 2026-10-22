@@ -65,7 +65,7 @@ for _s in (sys.stdout, sys.stderr):
 log = logging.getLogger("extract_assets")
 
 ROOT = Path(__file__).resolve().parent
-CATEGORIES = ("scroll", "embedded", "gifs", "images")
+CATEGORIES = ("videos_gifs", "images")
 OUT_W, OUT_H = 1080, 1920
 ASSET_DEVICE = "iPhone 14"
 ASSET_VIEWPORT = {"width": 390, "height": 844}
@@ -89,7 +89,8 @@ EMBED_REC_SECONDS = 8.0
 VIDEO_EXT = (".mp4", ".webm", ".mov", ".m4v", ".ogv", ".m3u8")
 SEGMENT_RE = re.compile(r"\.(ts|m4s|m4a|aac|mp3|vtt|key)(\?|$)|/seg(ment)?[-_]?\d+|[?&](range|bytestart)=", re.I)
 EMBED_RE = re.compile(r"(youtube(-nocookie)?\.com/(embed|watch|shorts)|youtu\.be/|player\.vimeo\.com/video/|vimeo\.com/\d+|"
-                      r"loom\.com/(embed|share)/|wistia\.(com|net)/(embed|medias)|wi\.st/)", re.I)
+                      r"loom\.com/(embed|share)/|wistia\.(com|net)/(embed|medias)|wi\.st/|"
+                      r"supademo\.com/|arcade\.software/|storylane\.io/|navattic\.com/|vidyard\.com/|streamable\.com/|dailymotion\.com/embed/)", re.I)
 FAVICON_RE = re.compile(r"favicon|apple-touch-icon|mstile|android-chrome-\d+|/icons?/|\.ico(\?|$)", re.I)
 TRACKING_RE = re.compile(r"pixel|beacon|/collect\?|facebook\.com/tr|doubleclick|analytics|/track", re.I)
 BOT_RE = re.compile(r"verify you are human|are you a robot|checking your browser|attention required|"
@@ -167,17 +168,83 @@ COLLECT_DOM_JS = """(withBg) => {
         for (const m of bg.matchAll(/url\\(["']?(.*?)["']?\\)/g)) add(m[1], 'img', el);
     }
   }
-  for (const f of document.querySelectorAll('iframe')) add(f.src || f.getAttribute('data-src'), 'iframe', f);
+  for (const f of document.querySelectorAll('iframe')) add(f.src || f.getAttribute('data-src') || f.getAttribute('data-lazy-src') || f.getAttribute('data-original'), 'iframe', f);
   for (const el of document.querySelectorAll('[class*="wistia_async_"]')) {
-    const m = el.className.match(/wistia_async_(\\w+)/);
+    const m = el.className.match(/wistia_async_(\w+)/);
     if (m) add('https://fast.wistia.net/embed/iframe/' + m[1], 'iframe', el);
+  }
+  for (const obj of document.querySelectorAll('object[data], embed[src]')) {
+    const src = obj.getAttribute('data') || obj.getAttribute('src');
+    if (src && /\.svg(\?|#|$)/i.test(src)) add(src, 'img', obj);
+  }
+  for (const svg of document.querySelectorAll('svg')) {
+    const r = svg.getBoundingClientRect();
+    if (r.width >= 20 && r.height >= 20) {
+      const use = svg.querySelector('use');
+      const href = use ? (use.getAttribute('href') || use.getAttribute('xlink:href')) : null;
+      if (href && !href.startsWith('#')) {
+        add(href, 'img', svg);
+      } else {
+        try {
+          const s = new XMLSerializer().serializeToString(svg);
+          if (s && s.length > 50 && s.length < 500000) {
+            const dataUrl = 'data:image/svg+xml;utf8,' + encodeURIComponent(s);
+            out.push({url: dataUrl, kind: 'img', ...pos(svg)});
+          }
+        } catch(e) {}
+      }
+    }
   }
   for (const a of document.querySelectorAll('a[href]')) {
     const h = a.href;
-    if (/\\.(mp4|webm|mov|m4v|m3u8)(\\?|#|$)/i.test(h)) add(h, 'video', a);
-    else if (/\\.gif(\\?|#|$)/i.test(h)) add(h, 'img', a);
-    else if (/(youtube\\.com\\/(watch|shorts)|youtu\\.be\\/|vimeo\\.com\\/\\d|loom\\.com\\/share\\/)/i.test(h)) add(h, 'iframe', a);
+    if (/\.(mp4|webm|mov|m4v|m3u8)(\?|#|$)/i.test(h)) add(h, 'video', a);
+    else if (/\.gif(\?|#|$)/i.test(h)) add(h, 'img', a);
+    else if (/\.svg(\?|#|$)/i.test(h)) add(h, 'img', a);
+    else if (/(youtube\.com\/(watch|shorts)|youtu\.be\/|vimeo\.com\/\d|loom\.com\/share\/|supademo\.com|arcade\.software|storylane\.io|vidyard\.com)/i.test(h)) add(h, 'iframe', a);
   }
+  // Recurse into shadow roots and collect from them too
+  const scanShadowRoots = (root) => {
+    try {
+      for (const el of root.querySelectorAll('*')) {
+        if (!el.shadowRoot) continue;
+        const sr = el.shadowRoot;
+        try {
+          for (const img of sr.querySelectorAll('img')) {
+            add(img.currentSrc || img.src, 'img', img);
+            for (const a of ['srcset','data-srcset']) { const v = img.getAttribute(a); if (v) add(best(v), 'img', img) }
+            for (const a of ['data-src','data-lazy-src','data-original','data-lazy']) add(img.getAttribute(a), 'img', img);
+          }
+          for (const v of sr.querySelectorAll('video')) {
+            add(v.currentSrc || v.getAttribute('src') || v.getAttribute('data-src'), 'video', v);
+            for (const s of v.querySelectorAll('source')) add(s.getAttribute('src') || s.getAttribute('data-src'), 'video', v);
+          }
+          for (const f of sr.querySelectorAll('iframe')) {
+            const src = f.src || f.getAttribute('data-src') || f.getAttribute('data-lazy-src');
+            if (src) add(src, 'iframe', f);
+          }
+          for (const svg of sr.querySelectorAll('svg')) {
+            const r = svg.getBoundingClientRect();
+            if (r.width >= 20 && r.height >= 20) {
+              try {
+                const s = new XMLSerializer().serializeToString(svg);
+                if (s && s.length > 50 && s.length < 500000) {
+                  const dataUrl = 'data:image/svg+xml;utf8,' + encodeURIComponent(s);
+                  out.push({url: dataUrl, kind: 'img', ...pos(svg)});
+                }
+              } catch(e) {}
+            }
+          }
+          if (withBg) for (const el2 of sr.querySelectorAll('*')) {
+            const bg = getComputedStyle(el2).backgroundImage;
+            if (bg && bg !== 'none' && bg.includes('url('))
+              for (const m of bg.matchAll(/url\(["']?(.*?)["']?\)/g)) add(m[1], 'img', el2);
+          }
+          scanShadowRoots(sr);  // recurse deeper
+        } catch(e) {}
+      }
+    } catch(e) {}
+  };
+  scanShadowRoots(document);
   return out;
 }"""
 
@@ -366,6 +433,58 @@ def ffprobe(path):
             "format": (data.get("format") or {}).get("format_name", "")}
 
 
+def normalize_video(path, is_embed=False):
+    """Normalize video with ffmpeg: libx264, yuv420p, +faststart, -an (unless embed).
+    Only re-encodes if codec != 'h264' or pix_fmt != 'yuv420p'.
+    Deletes clips < 50 KB or duration < 1s, logging 'removed empty clip: <name>'.
+    Returns (path_or_None, facts_dict).
+    """
+    path = Path(path)
+    if not path.exists():
+        return None, {}
+    f = ffprobe(path)
+    codec = (f.get("codec") or "").lower()
+    pix_fmt = (f.get("pix_fmt") or "").lower()
+    needs_reencode = codec != "h264" or pix_fmt != "yuv420p"
+
+    if needs_reencode:
+        tmp = path.with_name(path.stem + "_norm.mp4")
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(path), "-c:v", "libx264",
+               "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+        if not is_embed:
+            cmd.append("-an")
+        elif f.get("audio"):
+            cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+        cmd.append(str(tmp))
+        res = run(cmd, timeout=600)
+        if res.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+            tmp.replace(path)
+            f = ffprobe(path)
+        else:
+            log.warning("ffmpeg normalize failed for %s: %s", path.name, res.stderr)
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+    elif not is_embed and f.get("audio"):
+        tmp = path.with_name(path.stem + "_noaudio.mp4")
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(path), "-c:v", "copy",
+               "-an", "-movflags", "+faststart", str(tmp)]
+        res = run(cmd, timeout=300)
+        if res.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+            tmp.replace(path)
+            f = ffprobe(path)
+        else:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+
+    size = path.stat().st_size if path.exists() else 0
+    dur = f.get("duration") or 0.0
+    if size < 50 * 1024 or dur < 1.0:
+        log.info("removed empty clip: %s", path.name)
+        path.unlink(missing_ok=True)
+        return None, {}
+    return path, f
+
+
 def original_name(url):
     return (unquote(Path(urlparse(url).path).name) or "file")[:120]
 
@@ -493,12 +612,8 @@ def record_media(resp, state):
 
 # ---------------------------------------------------------------- exploring
 
-def collect(page, found, bg=False):
-    try:
-        items = page.evaluate(COLLECT_DOM_JS, bg)
-    except PWError as e:
-        log.debug("collect failed: %s", e)
-        return
+def _merge_items(items, found):
+    """Merge a list of {url, kind, y, w, h} items into the found dict."""
     for it in items:
         cur = found.get(it["url"])
         if cur is None:
@@ -507,15 +622,45 @@ def collect(page, found, bg=False):
             cur.update(y=it["y"], w=it["w"], h=it["h"])
 
 
+def collect(page, found, bg=False):
+    # Main frame
+    try:
+        items = page.evaluate(COLLECT_DOM_JS, bg)
+        _merge_items(items, found)
+    except PWError as e:
+        log.debug("collect main-frame failed: %s", e)
+    # Same-origin child frames (cross-origin frames raise, we skip them silently)
+    for frame in page.frames[1:]:  # [0] is the main frame, already done
+        try:
+            if frame.is_detached():
+                continue
+            items = frame.evaluate(COLLECT_DOM_JS, bg)
+            _merge_items(items, found)
+        except Exception as e:
+            log.debug("collect frame %s failed: %s", getattr(frame, "url", "?")[:60], e)
+
+
+SCROLL_TIMEOUT_S = 90  # hard cap: never spend more than this scrolling one page
+
+
 def scroll_page(page, found):
     stuck = 0
+    deadline = time.time() + SCROLL_TIMEOUT_S
     for i in range(MAX_SCROLL_STEPS):
+        if time.time() > deadline:
+            log.info("scroll_page: 90s cap reached at step %d", i)
+            break
         before = page.evaluate("scrollY")
         page.evaluate("scrollBy(0, innerHeight * 0.8)")
-        page.wait_for_timeout(250)
+        page.wait_for_timeout(400)  # was 250ms; raised to let lazy fetches complete
         if i % 3 == 0:
             page.evaluate(PROMOTE_LAZY_JS)
             collect(page, found)
+        if i % 10 == 9:  # every 10 steps, wait briefly for in-flight network requests
+            try:
+                page.wait_for_load_state("networkidle", timeout=3000)
+            except PWError:
+                pass
         if page.evaluate("scrollY") == before:
             stuck += 1
             page.wait_for_timeout(600)
@@ -555,6 +700,11 @@ def click_reveals(page, found):
                     el.click(timeout=1500, no_wait_after=True)
                     clicks += 1
                     page.wait_for_timeout(450)
+                # Wait for any lazy media triggered by this click to load
+                try:
+                    page.wait_for_load_state("networkidle", timeout=2000)
+                except PWError:
+                    pass
                 collect(page, found)
             except PWError:
                 continue
@@ -585,6 +735,23 @@ def session(cookies, ua):
 
 def download(url, dest_stem, referer, cookies, ua, ct_hint=""):
     """Full download (no Range header) to dest_stem + ext. Returns (path, error)."""
+    if url.startswith("data:"):
+        try:
+            header, b64_or_text = url.split(",", 1)
+            is_svg = "svg" in header.lower()
+            dest = dest_stem.with_suffix(".svg" if is_svg else ".png")
+            if ";base64" in header.lower():
+                import base64
+                data = base64.b64decode(b64_or_text)
+            else:
+                from urllib.parse import unquote
+                data = unquote(b64_or_text).encode("utf-8")
+            if len(data) > MAX_BYTES:
+                return None, "over 500 MB"
+            dest.write_bytes(data)
+            return dest, None
+        except Exception as e:
+            return None, f"data_url_error: {e}"
     if url.lower().split("?")[0].endswith(".m3u8") or "mpegurl" in ct_hint:
         return download_hls(url, dest_stem.with_suffix(".mp4"), referer, ua)
     try:
@@ -848,38 +1015,203 @@ def encode_segment(raw, dest, start, dur, size):
 
 # ---------------------------------------------------------------- scroll video
 
+# Minimum body characters that indicate real page content (not a spinner/interstitial)
+_REAL_CONTENT_RE = re.compile(
+    r"(<h[123]|<nav|<header|<main|<article|<section)|"
+    r"(sign.?up|log.?in|get.?started|try.?free|pricing|features|how.?it.?works)",
+    re.I,
+)
+
+
+def _bot_check_clear(page, wait_s=20):
+    """After goto(), poll until any Cloudflare/Turnstile 'Just a moment' challenge clears.
+
+    Returns True once real page content appears, False if blocked by bot check.
+    """
+    deadline = time.time() + wait_s
+    last_diag = {}
+    while time.time() < deadline:
+        try:
+            title = page.title() or ""
+            info = page.evaluate(
+                "() => {\r\n"
+                "  const body = document.body ? document.body.innerText.slice(0, 1500) : '';\r\n"
+                "  const h = document.querySelector('h1, h2, h3');\r\n"
+                "  const h_text = h ? (h.innerText || '').trim() : '';\r\n"
+                "  const h_tag = h ? h.tagName : null;\r\n"
+                "  const has_struct = !!document.querySelector('h1, h2, h3, nav, header, main, section, article');\r\n"
+                "  return { body, h_tag, h_text, has_struct };\r\n"
+                "}"
+            ) or {}
+            body = info.get("body", "") or ""
+            h_tag = info.get("h_tag")
+            h_text = info.get("h_text", "") or ""
+            has_struct = info.get("has_struct", False)
+        except PWError:
+            break
+
+        combined = f"{title} {h_text} {body}"
+        bot_match = BOT_RE.search(combined)
+        bot_token = bot_match.group(0) if bot_match else None
+
+        has_real_heading = bool(h_text and len(h_text) > 1 and not BOT_RE.search(h_text))
+        has_marketing_text = bool(_REAL_CONTENT_RE.search(combined))
+        has_normal_text = len(body.strip()) >= 50
+        content_found = has_real_heading or (has_struct and (has_marketing_text or has_normal_text))
+
+        last_diag = {
+            "title": title,
+            "bot_matched": bot_token,
+            "h_tag": h_tag,
+            "h_text": h_text[:40],
+            "has_struct": has_struct,
+            "body_len": len(body.strip()),
+            "content_found": content_found,
+        }
+
+        if not bot_match and content_found:
+            log.info("bot check clear: title=%r heading=%s:%r structure=%s text_len=%d",
+                     title, h_tag, h_text[:40], has_struct, len(body.strip()))
+            return True
+
+        page.wait_for_timeout(500)
+
+    log.warning("bot check failed: title=%r bot_matched=%r heading=%s:%r struct=%s text_len=%d",
+                last_diag.get("title"), last_diag.get("bot_matched"), last_diag.get("h_tag"),
+                last_diag.get("h_text"), last_diag.get("has_struct"), last_diag.get("body_len"))
+    return False
+
+
+def _scroll_ctx_kwargs(pw, storage_state=None):
+    """Build new_context kwargs for a mobile scroll recording session."""
+    device = dict(pw.devices[ASSET_DEVICE])
+    device["viewport"] = dict(ASSET_VIEWPORT)
+    if storage_state:
+        device["storage_state"] = storage_state
+    return device
+
+
 def record_scroll(pw, url, out_dir):
-    """Mobile 360x640 scroll-through + short clips of sections that move.
-    Returns (items for the manifest, error message or None)."""
-    raw_dir, scroll_dir = out_dir / "raw", out_dir / "scroll"
-    tmp = Path(tempfile.mkdtemp(prefix="rp_scroll_"))
-    browser = launch_or_connect(pw, headed=False, extra_args=["--autoplay-policy=no-user-gesture-required"])
-    marks, sections = {}, []
+    """iPhone-14 mobile scroll-through + short section clips.
+
+    Bot-check bypass, tried in order, stopping at the first that loads real content:
+      1. Headless Playwright Chromium (fastest)
+      2. Headed (visible) Playwright Chromium  - usually clears JS/Turnstile checks
+      3. Saved session from auth_<slug>.json   - a real logged-in profile always passes
+
+    After every goto(), waits up to 20 s for 'Just a moment' to clear.
+    If all attempts still show a bot check, logs 'blocked_by_bot_check' in the
+    manifest scroll_info and returns gracefully (empty items, no crash).
+
+    Returns (items for the manifest, error message or None).
+    """
+    from pipeline.grabber import slugify  # local import to keep module standalone
+
+    raw_dir, scroll_dir = out_dir / "raw", out_dir / "videos_gifs"
+    scroll_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # auth_<slug>.json written by login_once.py (option 3)
     try:
-        ctx = browser.new_context(viewport=REC_VIEWPORT, screen=REC_VIEWPORT, is_mobile=True, has_touch=True,
-                                  device_scale_factor=2, user_agent=MOBILE_UA, record_video_dir=str(tmp),
-                                  record_video_size=REC_VIEWPORT)
-        page = ctx.new_page()
-        t0 = time.time()
-        status = None
-        for attempt in range(2):
+        from urllib.parse import urlparse as _up
+        _host = (_up(url).hostname or "").lstrip("www.")
+        _slug = slugify(_host.split(".")[0])
+    except Exception:
+        _slug = "site"
+    auth_file = ROOT / f"auth_{_slug}.json"
+
+    ATTEMPTS = [
+        {"headed": False, "storage": None,                                      "label": "headless"},
+        {"headed": True,  "storage": None,                                      "label": "headed"},
+        {"headed": False, "storage": str(auth_file) if auth_file.exists() else None,
+                                                                                 "label": "auth-cookies"},
+    ]
+
+    marks, sections = {}, []
+    page = ctx = browser = None
+    tmp = None
+
+    for attempt_cfg in ATTEMPTS:
+        label   = attempt_cfg["label"]
+        headed  = attempt_cfg["headed"]
+        storage = attempt_cfg["storage"]
+
+        if label == "auth-cookies" and storage is None:
+            log.info("scroll: skipping auth-cookies attempt (no %s)", auth_file.name)
+            continue
+
+        log.info("scroll attempt [%s] headed=%s storage=%s", label, headed, bool(storage))
+        tmp = Path(tempfile.mkdtemp(prefix="rp_scroll_"))
+        browser = launch_or_connect(pw, headed=headed,
+                                    extra_args=["--autoplay-policy=no-user-gesture-required"])
+        try:
+            ctx_kwargs = _scroll_ctx_kwargs(pw, storage_state=storage)
+            ctx = browser.new_context(**ctx_kwargs, record_video_dir=str(tmp),
+                                      record_video_size=ASSET_VIEWPORT)
+            page = ctx.new_page()
+            t0 = time.time()
+            status = None
             try:
                 resp = page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
                 status = resp.status if resp else None
-            except PWError as e:
-                status = None
-                log.debug("scroll page load error: %s", e)
-            if status and status < 400:
-                break
-            time.sleep(BACKOFF[0])
-        if not status or status >= 400:
-            ctx.close()
-            return [], (f"Site returned {status} - no video." if status else "Site timed out - no video.")
-        try:
-            page.wait_for_load_state("networkidle", timeout=10000)
-        except PWError:
-            pass
+            except PWError as _e:
+                log.debug("scroll [%s] goto error: %s", label, _e)
+
+            if not status or status >= 400:
+                log.warning("scroll [%s]: HTTP %s – retrying", label, status)
+                ctx.close()
+                browser.close()
+                shutil.rmtree(tmp, ignore_errors=True)
+                tmp = browser = ctx = page = None
+                continue
+
+            # Wait for networkidle then check for bot wall
+            try:
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except PWError:
+                pass
+
+            bot_still_showing = not _bot_check_clear(page, wait_s=20)
+            if bot_still_showing:
+                log.warning("scroll [%s]: bot check still showing after 20 s", label)
+                ctx.close()
+                browser.close()
+                shutil.rmtree(tmp, ignore_errors=True)
+                tmp = browser = ctx = page = None
+                continue
+
+            # Real page loaded — proceed
+            log.info("scroll [%s]: real page loaded ✓", label)
+            break
+
+        except PWError as _e:
+            log.warning("scroll [%s] error: %s", label, _e)
+            try:
+                if ctx:     ctx.close()
+                if browser: browser.close()
+            except Exception:
+                pass
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
+            tmp = browser = ctx = page = None
+            continue
+
+    # --- all attempts exhausted? ---
+    if page is None:
+        return [], "blocked_by_bot_check"
+
+    # --- real page is open in (browser, ctx, page) ---
+    marks, sections = {}, []
+    try:
         close_cookie_popups(page)
+        # ── mobile layout verification screenshot ──────────────────────────
+        try:
+            shot_path = out_dir / "mobile_check.png"  # debug screenshot, kept out of the gallery folders
+            page.screenshot(path=str(shot_path), full_page=True, timeout=15000)
+            log.info("mobile screenshot saved → %s", shot_path.name)
+        except PWError as _e:
+            log.debug("mobile screenshot failed: %s", _e)
+        # ──────────────────────────────────────────────────────────────────
         try:
             page.add_style_tag(content=CHAT_WIDGET_CSS)
         except PWError:
@@ -923,14 +1255,16 @@ def record_scroll(pw, url, out_dir):
         t_close = time.time()
         ctx.close()
         raw_dest = raw_dir / "00_page_scroll.webm"
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        scroll_dir.mkdir(parents=True, exist_ok=True)
         shutil.move(str(Path(video.path())), raw_dest)
     except PWError as e:
         return [], "Scroll recording failed: " + str(e).splitlines()[0][:150]
     finally:
-        browser.close()
-        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            browser.close()
+        except Exception:
+            pass
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     k = (ffprobe(raw_dest).get("duration") or (t_close - t0)) / max(t_close - t0, 0.1)
     log.debug("recording clock factor %.3f", k)
@@ -939,7 +1273,8 @@ def record_scroll(pw, url, out_dir):
     dur = min((marks["scroll_end"] - marks["scroll_start"]) * k, 25.0)
     if not encode_segment(raw_dest, main, start, dur, (OUT_W, OUT_H)):
         return [], "Could not encode the scroll video."
-    items = [{"path": main, "type": "page_scroll", "y": 0, "title": ""}]
+    norm_main, f_main = normalize_video(main, is_embed=False)
+    items = [{"path": norm_main, "type": "page_scroll", "y": 0, "title": ""}] if norm_main else []
 
     hashes, n = [], 0
     for s in sections:
@@ -949,6 +1284,10 @@ def record_scroll(pw, url, out_dir):
         dest = scroll_dir / f"{n + 1:02d}_{name}.mp4"
         if not encode_segment(raw_dest, dest, (s["start"] - t0) * k, (s["end"] - s["start"]) * k, (OUT_W, OUT_H)):
             continue
+        norm_dest, f_dest = normalize_video(dest, is_embed=False)
+        if not norm_dest:
+            continue
+        dest = norm_dest
         h = phash(dest, "video")
         if h is not None and any(h - o <= NEAR_DUP for o in hashes):
             log.debug("section clip %s looks like an earlier one; dropped", dest.name)
@@ -974,13 +1313,13 @@ def clear_dir(d):
     log.debug("could not fully clear %s", d)
 
 
-def extract(url, out_dir):
+def extract(url, out_dir, tool=None):
     started = time.time()
     if "://" not in url:
         url = "https://" + url
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    for sub in (*CATEGORIES, "raw", ".staging", "gifs_videos"):
+    for sub in (*CATEGORIES, "raw", ".staging", "scroll", "embedded", "gifs"):
         clear_dir(out_dir / sub)
     for name in ("manifest.json", "report.json", "run.log"):
         (out_dir / name).unlink(missing_ok=True)
@@ -992,7 +1331,7 @@ def extract(url, out_dir):
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S"))
     log.addHandler(fh)
 
-    state = {"url": url, "tool": tool_name(url), "status": "failed", "message": "", "http_status": None,
+    state = {"url": url, "tool": tool or tool_name(url), "status": "failed", "message": "", "http_status": None,
              "attempts": [], "network": {}, "media_requests": [], "console_errors": [], "bot_check": False,
              "reasons": {}}
     manifest = []
@@ -1005,6 +1344,8 @@ def extract(url, out_dir):
         state["message"] = state["message"] or f"Extraction crashed ({type(e).__name__}) - nothing extracted."
     finally:
         shutil.rmtree(out_dir / ".staging", ignore_errors=True)
+        if (out_dir / "raw").exists() and not any((out_dir / "raw").iterdir()):
+            shutil.rmtree(out_dir / "raw", ignore_errors=True)
         out_dir.mkdir(parents=True, exist_ok=True)
         counts = {c: sum(1 for m in manifest if m["category"] == c) for c in CATEGORIES}
         report = {
@@ -1060,7 +1401,8 @@ def _extract(url, out_dir, state):
                 cands.append({"url": u, "kind": it["kind"], "y": it["y"] if it.get("h", 0) > 0 else None, "ct": ""})
             for u, it in state["network"].items():
                 if u not in found:
-                    cands.append({"url": u, "kind": it["kind"], "y": None, "ct": it["ct"]})
+                    cands.append({"url": u, "kind": it["kind"], "y": None,
+                                  "ct": it["ct"], "section": "network-only"})
             for c in cands:
                 if c["kind"] == "img" and is_video_url(c["url"]):
                     c["kind"] = "video"
@@ -1075,7 +1417,9 @@ def _extract(url, out_dir, state):
             state["message"] = "Site showed a bot check - results may be incomplete."
         log.info("> Recording scroll video")
         scroll_items, err = record_scroll(pw, url, out_dir)
-        state["scroll_info"] = {"error": err, "section_clips": max(0, len(scroll_items) - 1)}
+        bot_blocked = err == "blocked_by_bot_check"
+        state["scroll_info"] = {"error": err, "section_clips": max(0, len(scroll_items) - 1),
+                                "blocked_by_bot_check": bot_blocked}
         if err:
             log.warning("scroll video: %s", err)
 
@@ -1149,8 +1493,8 @@ def download_all(pw, ctx, page, cands, staging, raw_dir, state):
 
 def finish(staged, scroll_items, headings, out_dir, state):
     """Classify, filter stills, dedupe per category, name by page position, make mp4 versions."""
-    skipped = {"under_5kb": 0, "favicon": 0, "tracking_pixel": 0, "svg": 0, "not_media": 0,
-               "duplicate_sha256": 0, "duplicate_phash": 0, "convert_failed": 0}
+    skipped = {"under_5kb": 0, "too_small_px": 0, "favicon": 0, "tracking_pixel": 0, "svg": 0,
+               "not_media": 0, "duplicate_sha256": 0, "duplicate_phash": 0, "convert_failed": 0}
     groups = {"embedded": [], "gifs": [], "images": []}
     for it in staged:
         kind, facts = inspect(it["path"])
@@ -1170,11 +1514,18 @@ def finish(staged, scroll_items, headings, out_dir, state):
                 skipped["tracking_pixel"] += 1
             elif it["path"].stat().st_size < MIN_BYTES:
                 skipped["under_5kb"] += 1
+            elif max(w, h) < 150:  # skip icons/logos; never applied to GIFs or videos
+                skipped["too_small_px"] += 1
+                log.debug("skip too-small still %dx%d: %s", w, h, it["url"][:80])
             else:
                 it["type"] = "image"
                 groups["images"].append(it)
         elif kind == "svg":
-            skipped["svg"] += 1
+            if it["path"].stat().st_size < 30:
+                skipped["under_5kb"] += 1
+            else:
+                it["type"] = "svg"
+                groups["images"].append(it)
         else:
             skipped["not_media"] += 1
 
@@ -1205,32 +1556,34 @@ def finish(staged, scroll_items, headings, out_dir, state):
             label = section_for(it["y"], headings, ASSET_VIEWPORT["height"])
             if it["y"] is None and it.get("title"):
                 label = slug(it["title"])
+            elif it["y"] is None and it.get("section"):  # E6: preserve network-only tag
+                label = it["section"]
             entry = place(cat, it, f"{n:02d}_{label}", out_dir)
             if entry is None:
                 skipped["convert_failed"] += 1
                 continue
-            entry.update(page_order=n, page_y=it["y"], section=label)
+            entry.update(page_order=n, page_y=it["y"], section=label, page_section=label)
             manifest.append(entry)
 
     for n, it in enumerate(scroll_items):
-        p, f = it["path"], ffprobe(it["path"])
-        manifest.append({"category": "scroll", "type": it["type"], "filename": p.name, "path": f"scroll/{p.name}",
-                         "mp4": f"scroll/{p.name}", "source_url": state["url"],
+        p = it["path"]
+        if not p.exists():
+            continue
+        f = ffprobe(p)
+        sec_name = slug(it["title"]) if it["title"] else "scroll"
+        manifest.append({"category": "videos_gifs", "type": it["type"], "filename": p.name,
+                         "path": f"videos_gifs/{p.name}", "mp4": f"videos_gifs/{p.name}",
+                         "source_url": state["url"], "source URL": state["url"],
                          "original_filename": "recorded with Playwright", "width": f.get("width"),
                          "height": f.get("height"), "duration": f.get("duration"), "size_bytes": p.stat().st_size,
-                         "page_order": n, "page_y": it["y"], "section": slug(it["title"]) if it["title"] else ""})
+                         "page_order": n, "page_y": it["y"], "section": sec_name, "page_section": sec_name})
 
     state["skipped"] = skipped
     found, emb = state.get("found", {}), state.get("embeds", [])
     state["reasons"].update({
-        "embedded": (f"found {found.get('video_urls', 0)} video URLs and {len(emb)} video iframes, "
-                     "but none could be downloaded or recorded" if found.get("video_urls") or emb else
-                     "no <video> tags, no direct .mp4/.webm/.mov/.m3u8 links, no YouTube/Vimeo/Loom/Wistia iframes"
-                     f" ({found.get('iframes', 0)} other iframes)"),
-        "gifs": (f"no .gif files and no animated webp/png/avif ({found.get('image_urls', 0)} image URLs checked, "
-                 "all single-frame)"),
-        "images": (f"no still images left after filtering ({skipped['under_5kb']} under 5 KB, {skipped['favicon']} "
-                   f"favicons, {skipped['tracking_pixel']} tracking pixels, {skipped['svg']} SVGs)"),
+        "videos_gifs": (f"no video or GIF media found ({found.get('image_urls', 0)} image URLs checked)"),
+        "images": (f"no still images left after filtering ({skipped['under_5kb']} under 5 KB, {skipped['too_small_px']} too small, "
+                   f"{skipped['favicon']} favicons, {skipped['tracking_pixel']} tracking pixels, {skipped['svg']} SVGs)"),
     })
     return manifest
 
@@ -1252,20 +1605,27 @@ def _similar_shape(a, b, cat):
 
 
 def place(cat, it, stem, out_dir):
-    """Move a staged file into its category folder under its final name; make the mp4 version."""
+    """Move a staged file into videos_gifs or images under its final name; make the mp4 version."""
     src, facts = it["path"], it["facts"]
-    folder = out_dir / cat
+    target_sub = "videos_gifs" if cat in ("embedded", "gifs") else "images"
+    folder = out_dir / target_sub
     folder.mkdir(parents=True, exist_ok=True)
     (out_dir / "raw").mkdir(exist_ok=True)
     ext = src.suffix.lower() or ".bin"
-    entry = {"category": cat, "type": it["type"], "source_url": it["url"], "original_filename": original_name(it["url"]),
+    entry = {"category": target_sub, "type": it["type"], "source_url": it["url"],
+             "source URL": it["url"], "original_filename": original_name(it["url"]),
              "width": facts.get("width"), "height": facts.get("height"), "duration": facts.get("duration")}
     if cat == "images":
+        if it.get("type") == "svg" or ext == ".svg":
+            dest = folder / f"{stem}.svg"
+            shutil.move(str(src), dest)
+            entry.update(type="svg", filename=dest.name, path=f"{target_sub}/{dest.name}", mp4=None, size_bytes=dest.stat().st_size)
+            return entry
         if ext in (".bin", ".jpeg"):
             ext = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif", "AVIF": ".avif"}.get(facts.get("format"), ".jpg")
         dest = folder / f"{stem}{ext}"
         shutil.move(str(src), dest)
-        entry.update(filename=dest.name, path=f"{cat}/{dest.name}", mp4=None, size_bytes=dest.stat().st_size)
+        entry.update(filename=dest.name, path=f"{target_sub}/{dest.name}", mp4=None, size_bytes=dest.stat().st_size)
         return entry
     if cat == "gifs":
         ext = {"GIF": ".gif", "WEBP": ".webp", "PNG": ".png", "AVIF": ".avif"}.get(facts.get("format"), ext)
@@ -1275,7 +1635,10 @@ def place(cat, it, stem, out_dir):
         if not animated_to_mp4(dest, mp4, facts):
             log.warning("could not convert %s to mp4", dest.name)
             mp4 = None
-        entry.update(filename=dest.name, path=f"{cat}/{dest.name}", mp4=f"{cat}/{mp4.name}" if mp4 else None,
+        else:
+            norm_mp4, _ = normalize_video(mp4, is_embed=False)
+            mp4 = norm_mp4
+        entry.update(filename=dest.name, path=f"{target_sub}/{dest.name}", mp4=f"{target_sub}/{mp4.name}" if mp4 else None,
                      size_bytes=dest.stat().st_size, mp4_size_bytes=mp4.stat().st_size if mp4 else None)
         return entry
     dest = folder / f"{stem}.mp4"
@@ -1287,24 +1650,124 @@ def place(cat, it, stem, out_dir):
         entry["original_filename"] = "recorded playing in the browser"
     elif it.get("title"):
         entry["original_filename"] = it["title"]
-    f = ffprobe(dest)
-    entry.update(filename=dest.name, path=f"{cat}/{dest.name}", mp4=f"{cat}/{dest.name}", size_bytes=dest.stat().st_size,
+    is_emb = it["type"] in ("embed", "embed_recording")
+    norm_dest, f = normalize_video(dest, is_embed=is_emb)
+    if not norm_dest:
+        return None
+    entry.update(filename=dest.name, path=f"{target_sub}/{dest.name}", mp4=f"{target_sub}/{dest.name}", size_bytes=dest.stat().st_size,
                  width=f.get("width"), height=f.get("height"), duration=f.get("duration"))
     return entry
 
 
+def get_next_output_dir(tool_title, base_dir=None):
+    """Find existing numbered folders in output/ and return next auto-incremented path."""
+    if base_dir is None:
+        base_dir = ROOT / "output"
+    base_dir = Path(base_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
+    max_num = 0
+    for p in base_dir.iterdir():
+        if p.is_dir():
+            m = re.match(r"^(\d+)\s*-\s*(.+)$", p.name)
+            if m:
+                try:
+                    num = int(m.group(1))
+                    if num > max_num:
+                        max_num = num
+                except ValueError:
+                    pass
+    next_num = max_num + 1
+    return base_dir / f"{next_num:02d} - {tool_title}"
+
+
+def normalize_folder(folder_path):
+    """Normalize all .mp4 files in an output folder, delete empty/short clips, update manifest.json."""
+    folder = Path(folder_path)
+    if not folder.is_dir():
+        print(f"Folder not found: {folder}")
+        return
+    print(f"Normalizing videos in: {folder}")
+    mp4_files = sorted(folder.rglob("*.mp4"))
+    updated_files = {}
+    for p in mp4_files:
+        is_embed = "embed" in p.name.lower() or "embedded" in p.parts
+        norm_path, facts = normalize_video(p, is_embed=is_embed)
+        rel = p.relative_to(folder).as_posix()
+        if norm_path is None or not p.exists():
+            updated_files[rel] = None
+            updated_files[p.name] = None
+        else:
+            updated_files[rel] = (p.stat().st_size, facts.get("duration"))
+            updated_files[p.name] = (p.stat().st_size, facts.get("duration"))
+
+    mpath = folder / "manifest.json"
+    if mpath.is_file():
+        try:
+            m = json.loads(mpath.read_text(encoding="utf-8"))
+            if isinstance(m, dict):
+                items = m.get("items") or m.get("library") or []
+                new_items = []
+                for it in items:
+                    pkey = it.get("path") or it.get("filename") or it.get("file")
+                    fname = it.get("filename") or (Path(pkey).name if pkey else "")
+                    if pkey in updated_files or fname in updated_files:
+                        val = updated_files.get(pkey) or updated_files.get(fname)
+                        if val is None:
+                            continue
+                        size, dur = val
+                        it["size_bytes"] = size
+                        if dur is not None:
+                            it["duration"] = dur
+                    new_items.append(it)
+                if "items" in m:
+                    m["items"] = new_items
+                elif "library" in m:
+                    m["library"] = new_items
+                mpath.write_text(json.dumps(m, indent=2, ensure_ascii=False), encoding="utf-8")
+                print(f"Updated {mpath.name} with normalized video stats")
+            elif isinstance(m, list):
+                new_items = []
+                for it in m:
+                    pkey = it.get("path") or it.get("filename") or it.get("file")
+                    fname = it.get("filename") or (Path(pkey).name if pkey else "")
+                    if pkey in updated_files or fname in updated_files:
+                        val = updated_files.get(pkey) or updated_files.get(fname)
+                        if val is None:
+                            continue
+                        size, dur = val
+                        it["size_bytes"] = size
+                        if dur is not None:
+                            it["duration"] = dur
+                    new_items.append(it)
+                mpath.write_text(json.dumps(new_items, indent=2, ensure_ascii=False), encoding="utf-8")
+                print(f"Updated {mpath.name} with normalized video stats")
+        except Exception as e:
+            print(f"Could not update manifest.json: {e}")
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Extract a site's scroll video, embedded clips, GIFs and images.")
+    ap = argparse.ArgumentParser(description="Extract a site's visual assets into videos_gifs and images.")
     ap.add_argument("url_pos", nargs="?", help=argparse.SUPPRESS)
-    ap.add_argument("--url", help="website URL, e.g. https://gamma.app")
-    ap.add_argument("--out", help="output folder (default out/<domain>/)")
+    ap.add_argument("--tool", "-t", help="tool name, e.g. 'Pomelli' or 'Pomelli Visual Gen'")
+    ap.add_argument("--url", "-u", help="website URL, e.g. https://labs.google.com/pomelli")
+    ap.add_argument("--out", "-o", help="output folder (default output/<number> - <Tool Name>/)")
+    ap.add_argument("--headed", action="store_true", help="run browser in visible headed mode")
+    ap.add_argument("--fix-existing", help="normalize all videos in an existing output folder and update its manifest.json")
     a = ap.parse_args()
+    if a.fix_existing:
+        normalize_folder(a.fix_existing)
+        return 0
     url = a.url or a.url_pos
     if not url:
         ap.error("--url is required")
     if "://" not in url:
         url = "https://" + url
-    out_dir = Path(a.out) if a.out else ROOT / "out" / tool_name(url)
+
+    tool_display = a.tool.strip() if a.tool else tool_name(url).title()
+    if a.out:
+        out_dir = Path(a.out)
+    else:
+        out_dir = get_next_output_dir(tool_display, ROOT / "output")
 
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
@@ -1314,12 +1777,12 @@ def main():
     for noisy in ("urllib3", "PIL"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    report, manifest = extract(url, out_dir)
+    report, manifest = extract(url, out_dir, tool=tool_display)
     print()
     print(f"{report['tool']}  ({url})  status: {report['status']}" + (f"  - {report['message']}" if report["message"] else ""))
     for c in CATEGORIES:
         files = [m for m in manifest if m["category"] == c]
-        line = f"  {c:<9} {len(files):>3} files  {humans(sum(m['size_bytes'] for m in files)):>9}"
+        line = f"  {c:<12} {len(files):>3} files  {humans(sum(m['size_bytes'] for m in files)):>9}"
         if not files and c in report["empty_reasons"]:
             line += f"  ({report['empty_reasons'][c]})"
         print(line)

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<!-- Shared lead magnet template. pipeline/reel_kit.py replaces the double-brace placeholders;
+     the sections placeholder becomes <section class="block"> elements with a <ul> (checklist, playbook) or <ol> (guide). -->
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f4f1ea; color: #1d1b16; font: 15px/1.55 Georgia, "Times New Roman", serif;
+         -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .sheet { max-width: 780px; margin: 0 auto; padding: 56px 60px 48px; background: #fffdf8; min-height: 100vh; }
+  .eyebrow { font: 600 11px/1 Helvetica, Arial, sans-serif; letter-spacing: .14em; text-transform: uppercase; color: #8a5a00; }
+  h1 { font-size: 34px; line-height: 1.15; margin: 12px 0 8px; }
+  .subtitle { font-size: 17px; color: #5c574c; margin: 0 0 22px; }
+  .intro { border-left: 3px solid #8a5a00; padding: 4px 0 4px 16px; margin: 0 0 30px; }
+  .block { break-inside: avoid; margin: 0 0 24px; }
+  .label { font: 600 11px/1 Helvetica, Arial, sans-serif; letter-spacing: .1em; text-transform: uppercase; color: #8a8270; }
+  h2 { font-size: 20px; margin: 6px 0 10px; }
+  ul, ol { margin: 0; padding-left: 22px; }
+  li { margin: 0 0 7px; }
+  .checklist ul { list-style: none; padding-left: 0; }
+  .checklist li { position: relative; padding-left: 30px; }
+  .checklist li::before { content: ""; position: absolute; left: 0; top: 3px; width: 15px; height: 15px;
+                          border: 1.5px solid #1d1b16; border-radius: 3px; }
+  .cta { margin-top: 34px; padding: 18px 20px; background: #1d1b16; color: #fffdf8; border-radius: 8px; font-size: 16px; }
+  footer { margin-top: 22px; font: 12px/1.4 Helvetica, Arial, sans-serif; color: #8a8270; display: flex; justify-content: space-between; gap: 12px; }
+</style>
+{{partial:cta_styles}}
+</head>
+<body class="{{kind_class}}">
+  <main class="sheet">
+    <div class="eyebrow">{{tool}} &middot; Free {{kind}}</div>
+    <h1>{{title}}</h1>
+    <p class="subtitle">{{subtitle}}</p>
+    <p class="intro">{{intro}}</p>
+{{sections}}
+    <div class="cta">{{cta}}</div>
+    <!-- CTA partials from templates/cta_blocks.html, links from config/links.json -->
+    <div class="ctab-row">{{partial:course_button}} {{partial:lead_magnet_button}}</div>
+    {{partial:help_footer}}
+    <footer><span>{{url}}</span><span>{{date}}</span></footer>
+  </main>
+</body>
+</html>

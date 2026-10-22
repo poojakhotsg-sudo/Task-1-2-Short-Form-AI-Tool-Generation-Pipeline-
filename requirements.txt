@@ -12,3 +12,4 @@ yt-dlp
 python-dotenv
 pydantic
 imagehash
+groq

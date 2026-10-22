@@ -26,8 +26,12 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import BackgroundTasks, Body, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+import csv
+import hmac
+from datetime import datetime
+
+from fastapi import BackgroundTasks, Body, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from extract_assets import tool_name as site_folder
@@ -35,6 +39,7 @@ import gallery
 from pipeline import qa
 from pipeline.db import get_job_state, save_job_state
 from pipeline.grabber import H, W, slugify
+from pipeline.reel_kit import normalize_keyword
 
 from dotenv import load_dotenv
 
@@ -111,6 +116,48 @@ def busy(slug):
     return next((jid for jid, j in jobs.items() if j["slug"] == slug and j["status"] in ("running", "stopping")), None)
 
 
+DATA = ROOT / "data"
+# {"<tool folder>": {"price_tier": "free"|"paid", "checkout_url": "...", "comment_keyword": "GUIDE"}}
+TOOLS_DB = DATA / "tools.json"
+SUBSCRIBERS_CSV = DATA / "subscribers.csv"  # personal data: git-ignored
+CLICKS_CSV = DATA / "clicks.csv"            # git-ignored
+PRICE_TIERS = ("free", "paid")
+tools_db_lock = threading.Lock()
+csv_lock = threading.Lock()
+
+
+def tools_db():
+    db = read_json(TOOLS_DB, default={})
+    return db if isinstance(db, dict) else {}
+
+
+def tool_meta(name, db=None):
+    db = tools_db() if db is None else db
+    m = db.get(name)
+    m = m if isinstance(m, dict) else {}
+    tier = m.get("price_tier") if m.get("price_tier") in PRICE_TIERS else "free"
+    return {"price_tier": tier, "checkout_url": m.get("checkout_url") or "",
+            "comment_keyword": normalize_keyword(m.get("comment_keyword"))}
+
+
+def keyword_owners(keyword, db=None):
+    """Tool folders whose comment keyword is `keyword` (case-insensitive), in tools.json order."""
+    kw = normalize_keyword(keyword)
+    db = tools_db() if db is None else db
+    return [name for name in db if kw and tool_meta(name, db)["comment_keyword"] == kw]
+
+
+def save_tool_meta(name, price_tier, checkout_url, comment_keyword):
+    with tools_db_lock:
+        db = tools_db()
+        db[name] = {"price_tier": price_tier, "checkout_url": checkout_url,
+                    "comment_keyword": normalize_keyword(comment_keyword)}
+        TOOLS_DB.parent.mkdir(parents=True, exist_ok=True)
+        tmp = TOOLS_DB.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(db, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, TOOLS_DB)
+
+
 def format_bytes(num_bytes):
     if num_bytes < 1024:
         return f"{num_bytes} B"
@@ -131,6 +178,8 @@ def worker(job_id):
     cmd = [sys.executable, "-u", str(ROOT / "run.py"), "--tool", job["tool"], "--url", job["url"], "--out", str(OUT)]
     if job["num"]:
         cmd += ["--num", job["num"]]
+    if not job.get("run_ai_stages"):
+        cmd += ["--stages", "grab"]  # extraction only; describe/script/match need run_ai_stages=true
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONWARNINGS": "ignore"}
     try:
         proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -167,7 +216,7 @@ def worker(job_id):
 
 
 @app.post("/api/run")
-def start_run(tool: str = Form(...), url: str = Form(...), num: str = Form("")):
+def start_run(tool: str = Form(...), url: str = Form(...), num: str = Form(""), run_ai_stages: str = Form("false")):
     if is_job_running():
         raise HTTPException(400, "busy, try again")
     tool, url, num = tool.strip(), url.strip(), num.strip()
@@ -181,7 +230,8 @@ def start_run(tool: str = Form(...), url: str = Form(...), num: str = Form("")):
     with lock:
         job_id = uuid.uuid4().hex[:8]
         jobs[job_id] = {"tool": tool, "slug": slug, "url": url, "num": num, "status": "running",
-                        "log": [], "proc": None, "drive": None, "started": time.time()}
+                        "log": [], "proc": None, "drive": None, "started": time.time(),
+                        "run_ai_stages": run_ai_stages.strip().lower() in ("true", "1", "yes", "on")}
     save_job_state(job_id=job_id, url=url, stage="starting", status="running",
                    events=[], tool=tool, slug=slug, out_dir=OUT)
     threading.Thread(target=worker, args=(job_id,), daemon=True).start()
@@ -191,12 +241,36 @@ def start_run(tool: str = Form(...), url: str = Form(...), num: str = Form("")):
 EXTRACT_NAME_RE = re.compile(r"[a-z0-9][a-z0-9.-]*")
 
 
+def stream_proc(job_id, cmd, url, name, fallback_stage):
+    """Run one subprocess for an extract job, streaming its output into the job log. Returns the exit code."""
+    job = jobs[job_id]
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONWARNINGS": "ignore"}
+    try:
+        proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", env=env)
+    except OSError as e:
+        job["log"].append(f"could not start {' '.join(cmd[2:4])}: {e}")
+        return None
+    job["proc"] = proc
+    last_sync = time.time()
+    for line in proc.stdout:
+        line = line.rstrip("\n")
+        job["log"].append(line)
+        now = time.time()
+        if now - last_sync > 2.0 or line.startswith("> ") or "[PROGRESS]" in line:
+            last_sync = now
+            stg = extract_stage_from_log(job["log"]) or fallback_stage
+            save_job_state(job_id=job_id, url=url, stage=stg, status=job["status"],
+                           events=job["log"], tool=name, slug=name, out_dir=OUT)
+    return proc.wait()
+
+
 def asset_worker(job_id):
-    """Run extract_assets.py for each URL of the batch, one after another. A failed URL doesn't stop the rest."""
+    """Run extract_assets.py for each URL of the batch, one after another. A failed URL doesn't stop the rest.
+    With job["reel_kit"] set, each URL that extracted OK then gets its Reel Kit (pipeline/reel_kit.py)."""
     job = jobs[job_id]
     save_job_state(job_id=job_id, url=job["url"], stage="extracting", status="running",
                    events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
-    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONWARNINGS": "ignore"}
     for i, (url, name) in enumerate(zip(job["urls"], job["names"]), 1):
         if job["status"] == "stopping":
             break
@@ -205,26 +279,28 @@ def asset_worker(job_id):
         save_job_state(job_id=job_id, url=url, stage=f"Extracting {i}/{len(job['urls'])}", status=job["status"],
                        events=job["log"], tool=name, slug=name, out_dir=OUT)
         cmd = [sys.executable, "-u", str(ROOT / "extract_assets.py"), "--url", url, "--out", str(OUT / name)]
-        try:
-            proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", env=env)
-        except OSError as e:
-            job["log"].append(f"could not start extract_assets.py: {e}")
-            job["results"].append({"name": name, "url": url, "status": "failed"})
+        if job.get("tool"):
+            cmd += ["--tool", job["tool"]]
+        if job.get("headed"):
+            cmd.append("--headed")
+        code = stream_proc(job_id, cmd, url, name, f"Extracting {i}/{len(job['urls'])}")
+        result = {"name": name, "url": url, "status": "ok" if code == 0 else "failed"}
+        job["results"].append(result)
+        kit = job.get("reel_kit")
+        if not kit:
             continue
-        job["proc"] = proc
-        last_sync = time.time()
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            job["log"].append(line)
-            now = time.time()
-            if now - last_sync > 2.0 or line.startswith("> ") or "[PROGRESS]" in line:
-                last_sync = now
-                stg = extract_stage_from_log(job["log"]) or f"Extracting {i}/{len(job['urls'])}"
-                save_job_state(job_id=job_id, url=url, stage=stg, status=job["status"],
-                               events=job["log"], tool=name, slug=name, out_dir=OUT)
-        code = proc.wait()
-        job["results"].append({"name": name, "url": url, "status": "ok" if code == 0 else "failed"})
+        if code != 0 or job["status"] == "stopping":
+            result["reel_kit"] = "skipped"
+            continue
+        job["log"].append(f"> Generating Reel Kit for {url}")
+        cmd = [sys.executable, "-u", "-m", "pipeline.reel_kit", "--dir", str(OUT / name), "--url", url,
+               "--tool", job.get("tool") or name, "--demo-type", kit["demo_type"],
+               "--keyword", kit["comment_keyword"], "--magnet", kit["lead_magnet_type"]]
+        kit_code = stream_proc(job_id, cmd, url, name, "Generating Reel Kit")
+        result["reel_kit"] = "ok" if kit_code == 0 else "failed"
+        if kit_code != 0:
+            result["reel_kit_error"] = next((ln for ln in reversed(job["log"]) if ln.startswith("reel kit failed:")),
+                                            "reel kit failed (see log)")
     job["status"] = "stopped" if job["status"] == "stopping" else "done"
     save_job_state(job_id=job_id, url=job["url"], stage=job["status"], status=job["status"],
                    events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
@@ -259,6 +335,64 @@ def start_extract(url: str = Form(...)):
                    events=[], tool=names[0], slug=names[0], out_dir=OUT)
     threading.Thread(target=asset_worker, args=(job_id,), daemon=True).start()
     return {"job": job_id, "names": names, "already_running": False}
+
+
+def extract_folder(tool, url):
+    """out/ folder name for an extraction: the tool slug + ".assets" (never a pipeline folder, which has no dot)."""
+    url = url.strip()
+    url = url if not url or re.match(r"^https?://", url, re.I) else "https://" + url
+    tool_title = tool.strip() or (site_folder(url) if url else "")
+    slug = slugify(tool_title) if tool_title else ""
+    if not slug and url:
+        slug = site_folder(url)
+    if slug and "." not in slug:
+        slug += ".assets"
+    return slug
+
+
+@app.post("/api/extract-assets")
+def start_extract_assets(tool: str = Form(""), url: str = Form(...), headed: str = Form("0"),
+                         reel_kit: str = Form("0"), demo_type: str = Form(""), comment_keyword: str = Form(""),
+                         lead_magnet_type: str = Form(""), price_tier: str = Form(""), checkout_url: str = Form("")):
+    """Extract one URL; with reel_kit=1 the same job then writes hooks.json + lead_magnet.html/.pdf (Groq).
+    price_tier/checkout_url, when sent, are saved for the Asset Library in data/tools.json."""
+    if is_job_running():
+        raise HTTPException(400, "busy, try again")
+    price_tier, checkout_url = price_tier.strip().lower(), checkout_url.strip()
+    if price_tier and price_tier not in PRICE_TIERS:
+        raise HTTPException(400, "Price tier must be Free or Paid.")
+    if checkout_url and not re.match(r"^https?://\S+$", checkout_url, re.I):
+        raise HTTPException(400, "Checkout URL must start with http:// or https://")
+    url = url.strip()
+    if not url:
+        raise HTTPException(400, "Please enter a website URL.")
+    url = url if re.match(r"^https?://", url, re.I) else "https://" + url
+    if not URL_RE.match(url):
+        raise HTTPException(400, f"That doesn't look like a website URL: {url}")
+    tool_title = tool.strip() or site_folder(url)
+    slug = extract_folder(tool, url)
+    keyword = normalize_keyword(comment_keyword)
+    taken = [n for n in keyword_owners(keyword) if n != slug]
+    if taken:
+        raise HTTPException(409, f'Comment keyword "{keyword}" is already used by {taken[0]}. Pick another keyword.')
+    kit = None
+    if reel_kit.strip().lower() in ("1", "true", "yes", "on"):
+        from pipeline.reel_kit import clean_options
+        kit = clean_options({"demo_type": demo_type.strip(), "comment_keyword": comment_keyword,
+                             "lead_magnet_type": lead_magnet_type.strip()})
+    (OUT / slug).mkdir(parents=True, exist_ok=True)
+    if price_tier:
+        save_tool_meta(slug, price_tier, checkout_url, keyword)
+    with lock:
+        job_id = uuid.uuid4().hex[:8]
+        jobs[job_id] = {"tool": tool_title, "slug": slug, "url": url, "urls": [url], "names": [slug],
+                        "index": 0, "results": [], "num": "", "status": "running", "log": [], "proc": None,
+                        "drive": None, "started": time.time(), "type": "extract", "headed": headed == "1",
+                        "reel_kit": kit}
+    save_job_state(job_id=job_id, url=url, stage="extracting", status="running",
+                   events=[], tool=tool_title, slug=slug, out_dir=OUT)
+    threading.Thread(target=asset_worker, args=(job_id,), daemon=True).start()
+    return {"job": job_id, "slug": slug, "already_running": False}
 
 
 def extract_dir(name):
@@ -404,18 +538,24 @@ def shot_rows(d, manifest):
         if isinstance(s, dict) and "shot" in s:
             by_num[s["shot"]] = {"shot": s["shot"], "script_line": s.get("script_line", ""),
                                  "visual_needed": s.get("visual_needed", ""), "source": s.get("source"),
-                                 "duration": s.get("duration_seconds")}
+                                 "duration": s.get("duration_seconds"), "clip_file": s.get("clip_file")}
     clips = (manifest or {}).get("clips") or {}
     for s in (manifest or {}).get("shots", []):
         row = by_num.setdefault(s["shot"], {"shot": s["shot"], "duration": None})
         for k in ("script_line", "visual_needed", "source"):
             if not row.get(k):
                 row[k] = s.get(k)
+        if not row.get("duration"):
+            row["duration"] = s.get("duration_seconds")
         row["_m"] = s
     rows = []
     for n in sorted(by_num):
         row, s = by_num[n], by_num[n].pop("_m", {})
         src = url_for(d, s.get("file"))
+        # Preview player: the manifest's clip, else the clip the shot list names (path, or bare name in a media folder).
+        clip_file = row.pop("clip_file", None) or s.get("clip_file")
+        tries = [clip_file, f"clips/{clip_file}", f"videos_gifs/{clip_file}"] if clip_file and ".." not in clip_file else []
+        preview = src or next((u for u in map(lambda rel: url_for(d, rel), tries) if u), None)
         qa_state = (clips.get(str(n)) or {}).get("status") or s.get("qa")
         manual = s.get("status") == "manual"
         if src and (manual or qa_state == "pass"):
@@ -433,7 +573,8 @@ def shot_rows(d, manifest):
         if score is None and isinstance(s.get("matched"), dict):
             score = s["matched"].get("score")
         rows.append({**row, "source": row.get("source") or "-", "clip": src, "badge": badge, "reason": reason,
-                     "manual": manual, "match_score": score, "screenshot": url_for(d, s.get("screenshot"))})
+                     "manual": manual, "match_score": score, "screenshot": url_for(d, s.get("screenshot")),
+                     "preview_clip": preview})
     return rows
 
 
@@ -499,6 +640,9 @@ def tool_results(slug: str):
         "playwright_report": (pw := read_json(d / "playwright_report.json")),
         "blocked": bool(pw and pw.get("blocked")),
         "blocked_message": (pw.get("blocked_message") if pw else "") or "Blocked: use the marketing URL or tick Show browser",
+        "reel_kit": {"hooks": read_json(d / "hooks.json"), "lead_magnet_html": url_for(d, "lead_magnet.html"),
+                     "lead_magnet_pdf": url_for(d, "lead_magnet.pdf")},
+        "meta": tool_meta(d.name),
         "scroll_video_url": url_for(d, "gifs_videos/00_page_scroll.mp4"),
         "above_the_fold_url": url_for(d, "above_the_fold.png"),
         "page_mobile_url": url_for(d, "page_mobile.png"),
@@ -810,6 +954,210 @@ def assemble_cut(slug: str):
         raise HTTPException(500, f"Assembler error: {e}")
 
 
+# ---------- asset library ----------
+
+LIBRARY_FILES = ("hooks.json", "lead_magnet.html", "manifest.json", "site_data.json", "assets.json")
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".svg")
+
+
+def first_image(d):
+    """Thumbnail: the first extracted image (raster before SVG), in page order."""
+    for base in (d, d / "assets"):  # extract runs, and pipeline runs that extract into assets/
+        m = read_json(base / "manifest.json")
+        if isinstance(m, dict) and m.get("kind") == "extract":
+            imgs = [it for it in m.get("items") or [] if it.get("category") == "images" and it.get("path")]
+            imgs.sort(key=lambda it: (it.get("type") == "svg", it.get("page_order") or 0))
+            for it in imgs:
+                if u := url_for(d, (base / it["path"]).relative_to(d).as_posix()):
+                    return u
+    old = read_json(d / "assets.json")
+    if isinstance(old, list):
+        for a in old:
+            if a.get("type") == "image" and (u := url_for(d, a.get("file_path"))):
+                return u
+    for name in ("hero.png", "above_the_fold.png"):
+        if u := url_for(d, name):
+            return u
+    for sub in ("images", "assets/images"):
+        if (d / sub).is_dir():
+            for p in sorted((d / sub).iterdir()):
+                if p.suffix.lower() in IMAGE_EXT:
+                    return url_for(d, f"{sub}/{p.name}")
+    return None
+
+
+@app.get("/api/library")
+def library():
+    """One card per tool folder: name, thumbnail, top hook, Free/Paid, lead magnet links."""
+    db = read_json(TOOLS_DB, default={})
+    cards = []
+    for d in OUT.iterdir():
+        if not d.is_dir() or d.name.startswith(".") or not any((d / n).exists() for n in LIBRARY_FILES):
+            continue
+        hooks = read_json(d / "hooks.json")
+        hooks = hooks if isinstance(hooks, dict) else {}
+        manifest = read_json(d / "manifest.json")
+        manifest = manifest if isinstance(manifest, dict) else {}
+        site = read_json(d / "site_data.json")
+        site = site if isinstance(site, dict) else {}
+        hook_list = [h for h in hooks.get("hooks") or [] if isinstance(h, dict) and h.get("hook")]
+        updated = max(int((d / n).stat().st_mtime) for n in LIBRARY_FILES if (d / n).exists())
+        cards.append({
+            "slug": d.name,
+            "name": hooks.get("tool") or manifest.get("tool") or site.get("tool") or d.name,
+            "url": hooks.get("url") or manifest.get("url") or site.get("url") or "",
+            "thumb": first_image(d),
+            "hook": hook_list[0]["hook"] if hook_list else "",
+            "hook_count": len(hook_list),
+            "lead_magnet_type": hooks.get("lead_magnet_type") or "",
+            "pdf": url_for(d, "lead_magnet.pdf"),
+            "html": url_for(d, "lead_magnet.html"),
+            "updated": updated,
+            **tool_meta(d.name, db),
+        })
+    # Tools with a Reel Kit first, newest first within each group.
+    cards.sort(key=lambda c: (not (c["hook"] or c["pdf"]), -c["updated"]))
+    return {"tools": cards}
+
+
+# ---------- comment keywords, /go links and subscribers (backend for ManyChat flows) ----------
+
+EMAIL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                      r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$")
+
+
+def public_base(request):
+    """Base for links handed to ManyChat: PUBLIC_BASE_URL from .env when set, else the URL this request came in on."""
+    return (os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/") or str(request.base_url).rstrip("/"))
+
+
+def csv_safe(value):
+    """Stop spreadsheet apps from running a cell as a formula (=, +, -, @ at the start)."""
+    value = str(value or "")
+    return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
+
+
+def append_csv(path, header, row):
+    with csv_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new = not path.exists() or path.stat().st_size == 0
+        with path.open("a", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(header)
+            w.writerow([csv_safe(v) for v in row])
+
+
+def read_csv_rows(path):
+    try:
+        with path.open(newline="", encoding="utf-8") as f:
+            return list(csv.DictReader(f))
+    except OSError:
+        return []
+
+
+def tool_label(name):
+    hooks = read_json(OUT / name / "hooks.json")
+    return (hooks or {}).get("tool") if isinstance(hooks, dict) and hooks.get("tool") else name
+
+
+@app.get("/api/keyword-check")
+def keyword_check(keyword: str = "", tool: str = "", url: str = ""):
+    """For the Reel Kit form: is this keyword already taken by a different tool?"""
+    kw = normalize_keyword(keyword)
+    me = extract_folder(tool, url) if (tool.strip() or url.strip()) else ""
+    others = [n for n in keyword_owners(kw) if n != me]
+    return {"keyword": kw, "tool_id": me or None,
+            "conflict": {"tool_id": others[0], "name": tool_label(others[0])} if others else None}
+
+
+@app.get("/api/keywords")
+def keywords(request: Request):
+    """Every comment keyword: its tool, /go link, where it sends people, clicks so far, and duplicates."""
+    db = tools_db()
+    clicks = {}
+    for r in read_csv_rows(CLICKS_CSV):
+        k = normalize_keyword(r.get("keyword"))
+        clicks[k] = clicks.get(k, 0) + 1
+    base = public_base(request)
+    rows = []
+    for name in db:
+        meta = tool_meta(name, db)
+        kw = meta["comment_keyword"]
+        if not kw:
+            continue
+        rows.append({"keyword": kw, "tool_id": name, "tool": tool_label(name), "go_url": f"{base}/go/{kw}",
+                     "destination": "checkout" if meta["checkout_url"] else
+                                    "lead magnet" if (OUT / name / "lead_magnet.html").is_file() else "library",
+                     "price_tier": meta["price_tier"], "clicks": clicks.get(kw, 0),
+                     "duplicate": len(keyword_owners(kw, db)) > 1})
+    rows.sort(key=lambda r: r["keyword"])
+    return {"keywords": rows}
+
+
+@app.post("/api/subscribe")
+def subscribe(request: Request, payload: dict = Body(...), x_subscribe_token: str = Header("")):
+    """ManyChat Flow B webhook: {email, name?, keyword, tool_id} -> saved to data/subscribers.csv (one row per
+    email) and the tool's lead magnet PDF URL returned. If SUBSCRIBE_TOKEN is set in .env, the request must
+    send it in the X-Subscribe-Token header."""
+    token = os.environ.get("SUBSCRIBE_TOKEN", "").strip()
+    if token and not hmac.compare_digest(x_subscribe_token.encode(), token.encode()):
+        raise HTTPException(401, "Missing or wrong X-Subscribe-Token header.")
+    email = str(payload.get("email") or "").strip()
+    if len(email) > 254 or not EMAIL_RE.match(email):
+        raise HTTPException(400, "Please send a valid email address.")
+    name = re.sub(r"\s+", " ", str(payload.get("name") or "")).strip()[:100]
+    keyword = normalize_keyword(payload.get("keyword"))
+    tool_id = str(payload.get("tool_id") or "").strip()
+    if tool_id:
+        if not EXTRACT_NAME_RE.fullmatch(tool_id) or ".." in tool_id or not (OUT / tool_id).is_dir():
+            raise HTTPException(404, f"Unknown tool_id: {tool_id}")
+    elif keyword:
+        owners = keyword_owners(keyword)
+        if not owners:
+            raise HTTPException(404, f"No tool uses the keyword {keyword}.")
+        tool_id = owners[0]
+    else:
+        raise HTTPException(400, "Send tool_id or keyword so I know which lead magnet to return.")
+
+    with csv_lock:  # check-and-append under one lock so two webhooks for one email can't both be added
+        known = {r.get("email", "").lstrip("'").lower() for r in read_csv_rows(SUBSCRIBERS_CSV)}
+        duplicate = email.lower() in known
+        if not duplicate:
+            SUBSCRIBERS_CSV.parent.mkdir(parents=True, exist_ok=True)
+            new = not SUBSCRIBERS_CSV.exists() or SUBSCRIBERS_CSV.stat().st_size == 0
+            with SUBSCRIBERS_CSV.open("a", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                if new:
+                    w.writerow(["subscribed_at", "email", "name", "keyword", "tool_id"])
+                w.writerow([csv_safe(v) for v in
+                            (datetime.now().isoformat(timespec="seconds"), email, name, keyword, tool_id)])
+    pdf = url_for(OUT / tool_id, "lead_magnet.pdf")
+    return {"ok": True, "duplicate": duplicate, "tool_id": tool_id,
+            "pdf_url": public_base(request) + pdf if pdf else None,
+            "message": ("Already subscribed" if duplicate else "Subscribed")
+                       + ("" if pdf else "; this tool has no lead magnet PDF yet")}
+
+
+@app.get("/go/{keyword}")
+def go(keyword: str, request: Request):
+    """Comment-keyword link: the tool's checkout_url, else its lead magnet page, else /library. Every hit is logged."""
+    kw = normalize_keyword(keyword)
+    db = tools_db()
+    owners = keyword_owners(kw, db)
+    tool_id = owners[0] if owners else ""
+    target = "/library"
+    if tool_id:
+        meta = tool_meta(tool_id, db)
+        if re.match(r"^https?://\S+$", meta["checkout_url"], re.I):
+            target = meta["checkout_url"]
+        elif (OUT / tool_id / "lead_magnet.html").is_file():
+            target = f"/out/{quote(tool_id)}/lead_magnet.html"
+    append_csv(CLICKS_CSV, ["clicked_at", "keyword", "tool_id", "redirect_to"],
+               [datetime.now().isoformat(timespec="seconds"), kw or keyword[:30], tool_id, target])
+    return RedirectResponse(target, status_code=302)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -827,6 +1175,11 @@ def index():
 @app.get("/pipeline")
 def pipeline_page():
     return FileResponse(ROOT / "web" / "pipeline.html", media_type="text/html; charset=utf-8")
+
+
+@app.get("/library")
+def library_page():
+    return FileResponse(ROOT / "web" / "library.html", media_type="text/html; charset=utf-8")
 
 
 @app.get("/extractor")
