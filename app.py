@@ -46,7 +46,9 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
-OUT = Path(os.environ.get("REEL_OUT_DIR") or ROOT / "out").resolve()  # override for testing
+# Vercel's bundle (/var/task) is read-only; only /tmp is writable there.
+WRITABLE_ROOT = Path("/tmp/reel-pipeline") if os.environ.get("VERCEL") else ROOT
+OUT = Path(os.environ.get("REEL_OUT_DIR") or WRITABLE_ROOT / "out").resolve()  # override for testing
 OUT.mkdir(parents=True, exist_ok=True)
 DRIVE_RE = re.compile(r"https://drive\.google\.com/drive/folders/[\w-]+")
 MAX_UPLOAD_MB = 1000
@@ -213,9 +215,14 @@ def busy(slug):
     return next((jid for jid, j in jobs.items() if j["slug"] == slug and j["status"] in ("running", "stopping")), None)
 
 
-DATA = ROOT / "data"
+# Same dir as pipeline/db.py: REEL_DATA_DIR, else /tmp on Vercel, else data/ in the repo.
+DATA = Path(os.environ.get("REEL_DATA_DIR") or WRITABLE_ROOT / "data").resolve()
 # {"<tool folder>": {"price_tier": "free"|"paid", "checkout_url": "...", "comment_keyword": "GUIDE"}}
 TOOLS_DB = DATA / "tools.json"
+BUNDLED_TOOLS_DB = ROOT / "data" / "tools.json"  # committed copy; seeds a fresh DATA dir
+if not TOOLS_DB.exists() and BUNDLED_TOOLS_DB.is_file():
+    DATA.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(BUNDLED_TOOLS_DB, TOOLS_DB)
 SUBSCRIBERS_CSV = DATA / "subscribers.csv"  # personal data: git-ignored
 CLICKS_CSV = DATA / "clicks.csv"            # git-ignored
 PRICE_TIERS = ("free", "paid")

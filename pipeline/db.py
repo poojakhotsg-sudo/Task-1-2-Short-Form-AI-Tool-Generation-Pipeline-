@@ -20,7 +20,8 @@ log = logging.getLogger("db")
 ROOT = Path(__file__).resolve().parent.parent
 # REEL_DATA_DIR puts jobs.db on a persistent disk (e.g. a Render disk); the container's own
 # filesystem is wiped on every restart, so without it (or Supabase) job state can't survive one.
-DATA_DIR = Path(os.environ.get("REEL_DATA_DIR") or ROOT / "data").resolve()
+_writable_root = Path("/tmp/reel-pipeline") if os.environ.get("VERCEL") else ROOT
+DATA_DIR = Path(os.environ.get("REEL_DATA_DIR") or _writable_root / "data").resolve()
 DB_PATH = DATA_DIR / "jobs.db"
 _db_lock = threading.Lock()
 _supabase_full_columns = True  # set False once the table rejects the extra columns
@@ -147,7 +148,7 @@ def save_job_state(
 
     # 2. Local disk backup (.jobs/<job_id>.json)
     try:
-        root_out = Path(out_dir) if out_dir else ROOT / "out"
+        root_out = Path(out_dir) if out_dir else _writable_root / "out"
         jobs_dir = root_out / ".jobs"
         jobs_dir.mkdir(parents=True, exist_ok=True)
         (jobs_dir / f"{job_id}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -241,7 +242,7 @@ def get_job_state(job_id, out_dir=None):
 
     # 2. Check local disk fallback
     try:
-        root_out = Path(out_dir) if out_dir else ROOT / "out"
+        root_out = Path(out_dir) if out_dir else _writable_root / "out"
         backup_file = root_out / ".jobs" / f"{job_id}.json"
         if backup_file.is_file():
             data = json.loads(backup_file.read_text(encoding="utf-8"))
@@ -292,7 +293,7 @@ def list_all_jobs(out_dir=None):
 
     # Merge any .jobs/*.json that might be on disk
     try:
-        root_out = Path(out_dir) if out_dir else ROOT / "out"
+        root_out = Path(out_dir) if out_dir else _writable_root / "out"
         jobs_dir = root_out / ".jobs"
         if jobs_dir.is_dir():
             for p in jobs_dir.glob("*.json"):

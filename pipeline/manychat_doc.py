@@ -18,8 +18,11 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 DOC = ROOT / "docs" / "manychat_setup.md"
-TOOLS_DB = ROOT / "data" / "tools.json"
-OUT = Path(os.environ.get("REEL_OUT_DIR") or ROOT / "out")
+_writable_root = Path("/tmp/reel-pipeline") if os.environ.get("VERCEL") else ROOT
+TOOLS_DB = Path(os.environ.get("REEL_DATA_DIR") or _writable_root / "data") / "tools.json"
+if not TOOLS_DB.is_file():  # app.py hasn't seeded the writable copy yet
+    TOOLS_DB = ROOT / "data" / "tools.json"
+OUT = Path(os.environ.get("REEL_OUT_DIR") or _writable_root / "out")
 START, END = "<!-- tools-table:start -->", "<!-- tools-table:end -->"
 
 GUIDE = """# ManyChat setup: comment keyword -> DM

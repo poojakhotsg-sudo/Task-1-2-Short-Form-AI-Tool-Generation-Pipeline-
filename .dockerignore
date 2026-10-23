@@ -11,3 +11,7 @@ out/
 auth_*.json
 token.json
 credentials.json
+output/
+data/subscribers.csv
+data/clicks.csv
+data/jobs.db
