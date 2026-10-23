@@ -1,0 +1,6 @@
+# Vercel serves only the static UI. The FastAPI backend (app.py + pipeline/) needs Chromium,
+# ffmpeg and long-running jobs, so it runs on Render (render.yaml); uploading it here makes Vercel
+# build it as a serverless function, which goes over the 500 MB function limit.
+/*
+!/index.html
+!/vercel.json
