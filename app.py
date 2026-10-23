@@ -38,7 +38,7 @@ from fastapi.staticfiles import StaticFiles
 from extract_assets import tool_name as site_folder
 import gallery
 from pipeline import qa
-from pipeline.db import get_job_state, save_job_state
+from pipeline.db import get_job_state, save_job_state, list_all_jobs
 from pipeline.grabber import H, W, slugify
 from pipeline.reel_kit import normalize_keyword
 
@@ -70,46 +70,84 @@ lock = threading.Lock()
 _process_start = time.time()  # used to detect recent restarts
 
 
-def _recover_jobs_from_disk():
-    """On startup, reload any finished/interrupted jobs from the .jobs/ disk cache
-    so GET /api/job/<id> doesn't 404 for jobs that completed before a restart."""
-    jobs_dir = OUT / ".jobs"
-    if not jobs_dir.is_dir():
-        return
-    count = 0
-    for p in jobs_dir.glob("*.json"):
+INTERRUPTED_STAGE = "The server restarted while this job was running, so it was stopped. Please start a new extraction."
+
+
+def stage_errors(log_lines):
+    """The "<stage>: <reason>" of every [STAGE-ERROR] line run.py printed."""
+    return [ln.split("[STAGE-ERROR]", 1)[1].strip() for ln in log_lines or [] if "[STAGE-ERROR]" in ln]
+
+
+def _outcome_on_disk(data):
+    """For a job stored as running whose process died with the server: (status, stage) from what
+    it left in out/<slug>/, or None if it didn't get to the end."""
+    slug = data.get("slug") or data.get("tool") or ""
+    d = OUT / slug if slug and ".." not in slug else None
+    if not d or not d.is_dir():
+        return None
+    started = float(data.get("started") or 0)
+    if data.get("type") == "extract":
+        path = d / "manifest.json"
+        m = read_json(path)
+        if isinstance(m, dict) and m.get("kind") == "extract" and m.get("finished") and path.stat().st_mtime >= started:
+            return ("done", "Extraction complete") if m.get("status") == "ok" else \
+                   ("failed", f"Extraction {m.get('status')}: {m.get('message') or 'see report.json'}")
+        return None
+    path = d / "run.log"
+    if not path.is_file() or path.stat().st_mtime < started:
+        return None
+    lines = (read_text(path) or "").splitlines()
+    head = max((i for i, ln in enumerate(lines) if "=== " in ln and "=== done:" not in ln), default=-1)
+    tail = lines[head + 1:]
+    if not any("=== done:" in ln for ln in tail):
+        return None
+    errors = stage_errors(tail)
+    return ("failed", "Stage errors: " + "; ".join(errors)) if errors else ("done", "Pipeline complete")
+
+
+def _restore_job(job_id, data):
+    """A job from the durable store as an entry for `jobs`. Only this process runs jobs, so one stored
+    as running/stopping died with the previous server: it becomes done/failed if its output shows it
+    finished, else interrupted. The corrected state is saved back."""
+    events = data.get("events") or []
+    if isinstance(events, str):
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            jid = data.get("job_id") or p.stem
-            if jid and jid not in jobs:
-                events = data.get("events") or []
-                if isinstance(events, str):
-                    try:
-                        events = json.loads(events)
-                    except Exception:
-                        events = [events]
-                jobs[jid] = {
-                    "tool": data.get("tool") or data.get("slug") or "",
-                    "slug": data.get("slug") or data.get("tool") or "",
-                    "url": data.get("url") or "",
-                    "num": "",
-                    "status": data.get("status") or "done",
-                    "log": events,
-                    "proc": None,
-                    "drive": data.get("drive"),
-                    "started": _process_start,
-                    "_recovered": True,
-                }
-                count += 1
-        except Exception:
-            pass
-    if count:
-        print(f"[startup] recovered {count} jobs from disk cache", flush=True)
+            events = json.loads(events)
+        except ValueError:
+            events = [events]
+    slug = data.get("slug") or data.get("tool") or ""
+    job = {"tool": data.get("tool") or slug, "slug": slug, "url": data.get("url") or "", "num": "",
+           "status": data.get("status") or "done", "stage": data.get("stage") or "", "log": list(events),
+           "proc": None, "drive": data.get("drive"), "started": float(data.get("started") or _process_start),
+           "type": data.get("type") or "run", "results": data.get("results") or [], "_recovered": True}
+    if job["status"] in ("running", "stopping"):
+        outcome = _outcome_on_disk(data)
+        job["status"], job["stage"] = outcome or ("interrupted", INTERRUPTED_STAGE)
+        job["log"].append(f"[server restarted] this job is now marked {job['status']}: {job['stage']}")
+        save_job_state(job_id=job_id, url=job["url"], stage=job["stage"], status=job["status"], events=job["log"],
+                       tool=job["tool"], slug=slug, out_dir=OUT, job_type=job["type"], results=job["results"],
+                       drive=job["drive"], started=job["started"])
+    return job
 
 
-_recover_jobs_from_disk()
-print(f"[startup] reel-pipeline ready (out={OUT})", flush=True)
-
+def _recover_jobs_from_disk():
+    """On startup, load every job in the durable store so GET /api/job/<id> keeps answering after a
+    restart, and jobs that were cut off by it show as interrupted instead of running forever."""
+    try:
+        stored = list_all_jobs(OUT)
+    except Exception as e:
+        print(f"[startup] could not read the job store: {e}", flush=True)
+        return
+    for data in stored:
+        jid = data.get("job_id")
+        if not jid or jid in jobs:
+            continue
+        try:
+            jobs[jid] = _restore_job(jid, data)
+        except Exception as e:
+            print(f"[startup] could not recover job {jid}: {e}", flush=True)
+    print(f"[startup] recovered {len(jobs)} jobs from the job store "
+          f"({sum(j['status'] == 'interrupted' for j in jobs.values())} interrupted)", flush=True)
 
 
 def is_job_running():
@@ -129,6 +167,10 @@ def extract_stage_from_log(log_lines):
             return "Navigating to page..."
         elif ln.startswith("> "):
             return ln.strip()[2:].rstrip(" .")
+        elif "ERROR" in ln or "failed" in ln.lower() or "exception" in ln.lower():
+            clean = re.sub(r"^\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+)?", "", ln).strip()
+            if len(clean) > 5 and not clean.startswith("Traceback"):
+                return clean
     return ""
 
 
@@ -224,17 +266,24 @@ def format_bytes(num_bytes):
         return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
+_recover_jobs_from_disk()
+print(f"[startup] reel-pipeline ready (out={OUT})", flush=True)
+
+
 # ---------- background run ----------
 
 def worker(job_id):
     job = jobs[job_id]
     save_job_state(job_id=job_id, url=job["url"], stage="starting", status="running",
-                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
+                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT,
+                   job_type="run", started=job["started"])
     cmd = [sys.executable, "-u", str(ROOT / "run.py"), "--tool", job["tool"], "--url", job["url"], "--out", str(OUT)]
-    if job["num"]:
+    if job.get("num"):
         cmd += ["--num", job["num"]]
-    if not job.get("run_ai_stages"):
-        cmd += ["--stages", "grab"]  # extraction only; describe/script/match need run_ai_stages=true
+    if job.get("stages"):
+        cmd += ["--stages", job["stages"]]
+    elif not job.get("run_ai_stages", True):
+        cmd += ["--stages", "grab"]  # explicit extraction only requested
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONWARNINGS": "ignore"}
     try:
         proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -243,7 +292,8 @@ def worker(job_id):
         job["log"].append(f"could not start run.py: {e}")
         job["status"] = "failed"
         save_job_state(job_id=job_id, url=job["url"], stage="failed", status="failed",
-                       events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
+                       events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT,
+                       job_type="run", started=job["started"])
         return
     job["proc"] = proc
     last_sync = time.time()
@@ -257,21 +307,26 @@ def worker(job_id):
             last_sync = now
             stg = extract_stage_from_log(job["log"])
             save_job_state(job_id=job_id, url=job["url"], stage=stg, status=job["status"],
-                           events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
+                           events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT,
+                           job_type="run", started=job["started"], drive=job["drive"])
     code = proc.wait()
+    errors = stage_errors(job["log"])
     if job["status"] == "stopping":
-        job["status"] = "stopped"
+        job["status"], job["stage"] = "stopped", "Stopped"
     else:
         job["status"] = "done" if code == 0 else "failed"
-        if code:
+        if code and not errors:
             job["log"].append(f"run.py exited with code {code}")
-    stg = extract_stage_from_log(job["log"]) or job["status"]
+        job["stage"] = ("Stage errors: " + "; ".join(errors) if errors
+                        else f"run.py exited with code {code} (see log)" if code else "Pipeline complete")
+    stg = job["stage"]
     save_job_state(job_id=job_id, url=job["url"], stage=stg, status=job["status"],
-                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
+                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT,
+                   job_type="run", started=job["started"], drive=job["drive"])
 
 
 @app.post("/api/run")
-def start_run(tool: str = Form(...), url: str = Form(...), num: str = Form(""), run_ai_stages: str = Form("false")):
+def start_run(tool: str = Form(...), url: str = Form(...), num: str = Form(""), run_ai_stages: str = Form("true"), stages: str = Form("")):
     if is_job_running():
         raise HTTPException(400, "busy, try again")
     tool, url, num = tool.strip(), url.strip(), num.strip()
@@ -286,9 +341,10 @@ def start_run(tool: str = Form(...), url: str = Form(...), num: str = Form(""), 
         job_id = uuid.uuid4().hex[:8]
         jobs[job_id] = {"tool": tool, "slug": slug, "url": url, "num": num, "status": "running",
                         "log": [], "proc": None, "drive": None, "started": time.time(),
+                        "stages": stages.strip(),
                         "run_ai_stages": run_ai_stages.strip().lower() in ("true", "1", "yes", "on")}
     save_job_state(job_id=job_id, url=url, stage="starting", status="running",
-                   events=[], tool=tool, slug=slug, out_dir=OUT)
+                   events=[], tool=tool, slug=slug, out_dir=OUT, job_type="run", started=jobs[job_id]["started"])
     threading.Thread(target=worker, args=(job_id,), daemon=True).start()
     return {"job": job_id, "slug": slug, "already_running": False}
 
@@ -315,24 +371,28 @@ def stream_proc(job_id, cmd, url, name, fallback_stage):
         if now - last_sync > 2.0 or line.startswith("> ") or "[PROGRESS]" in line:
             last_sync = now
             stg = extract_stage_from_log(job["log"]) or fallback_stage
-            save_job_state(job_id=job_id, url=url, stage=stg, status=job["status"],
-                           events=job["log"], tool=name, slug=name, out_dir=OUT)
+            save_extract_job(job_id, stg)
     return proc.wait()
+
+
+def save_extract_job(job_id, stage):
+    job = jobs[job_id]
+    save_job_state(job_id=job_id, url=job["url"], stage=stage, status=job["status"], events=job["log"],
+                   tool=job["tool"], slug=job["slug"], out_dir=OUT, job_type="extract",
+                   results=job["results"], started=job["started"])
 
 
 def asset_worker(job_id):
     """Run extract_assets.py for each URL of the batch, one after another. A failed URL doesn't stop the rest.
     With job["reel_kit"] set, each URL that extracted OK then gets its Reel Kit (pipeline/reel_kit.py)."""
     job = jobs[job_id]
-    save_job_state(job_id=job_id, url=job["url"], stage="extracting", status="running",
-                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
+    save_extract_job(job_id, "extracting")
     for i, (url, name) in enumerate(zip(job["urls"], job["names"]), 1):
         if job["status"] == "stopping":
             break
         job.update(index=i, url=url, slug=name)
         job["log"].append(f"> Extracting {i} of {len(job['urls'])}: {url}")
-        save_job_state(job_id=job_id, url=url, stage=f"Extracting {i}/{len(job['urls'])}", status=job["status"],
-                       events=job["log"], tool=name, slug=name, out_dir=OUT)
+        save_extract_job(job_id, f"Extracting {i}/{len(job['urls'])}")
         cmd = [sys.executable, "-u", str(ROOT / "extract_assets.py"), "--url", url, "--out", str(OUT / name)]
         if job.get("tool"):
             cmd += ["--tool", job["tool"]]
@@ -340,6 +400,9 @@ def asset_worker(job_id):
             cmd.append("--headed")
         code = stream_proc(job_id, cmd, url, name, f"Extracting {i}/{len(job['urls'])}")
         result = {"name": name, "url": url, "status": "ok" if code == 0 else "failed"}
+        if code != 0:  # extract_assets.py ends with "<tool> (<url>) status: failed - <why>"
+            result["error"] = next((ln.strip() for ln in reversed(job["log"]) if " status: " in ln),
+                                   f"extract_assets.py exited with code {code} (see log)")
         job["results"].append(result)
         kit = job.get("reel_kit")
         if not kit:
@@ -356,9 +419,16 @@ def asset_worker(job_id):
         if kit_code != 0:
             result["reel_kit_error"] = next((ln for ln in reversed(job["log"]) if ln.startswith("reel kit failed:")),
                                             "reel kit failed (see log)")
-    job["status"] = "stopped" if job["status"] == "stopping" else "done"
-    save_job_state(job_id=job_id, url=job["url"], stage=job["status"], status=job["status"],
-                   events=job["log"], tool=job["tool"], slug=job["slug"], out_dir=OUT)
+    failed = [r for r in job["results"] if r["status"] != "ok"]
+    if job["status"] == "stopping":
+        job["status"], job["stage"] = "stopped", "Stopped"
+    elif failed and len(failed) == len(job["results"]):
+        job["status"], job["stage"] = "failed", "; ".join(r["error"] for r in failed)
+    else:
+        job["status"] = "done"
+        job["stage"] = ("Extraction complete" if not failed
+                        else "Extraction complete except: " + "; ".join(r["error"] for r in failed))
+    save_extract_job(job_id, job["stage"])
 
 
 URL_RE = re.compile(r"^https?://[\w.-]+\.[a-z]{2,}(:\d+)?(/\S*)?$", re.I)
@@ -386,8 +456,7 @@ def start_extract(url: str = Form(...)):
         jobs[job_id] = {"tool": names[0], "slug": names[0], "url": urls[0], "urls": urls, "names": names, "index": 0,
                         "results": [], "num": "", "status": "running", "log": [], "proc": None, "drive": None,
                         "started": time.time(), "type": "extract"}
-    save_job_state(job_id=job_id, url=urls[0], stage="extracting", status="running",
-                   events=[], tool=names[0], slug=names[0], out_dir=OUT)
+    save_extract_job(job_id, "extracting")
     threading.Thread(target=asset_worker, args=(job_id,), daemon=True).start()
     return {"job": job_id, "names": names, "already_running": False}
 
@@ -444,8 +513,7 @@ def start_extract_assets(tool: str = Form(""), url: str = Form(...), headed: str
                         "index": 0, "results": [], "num": "", "status": "running", "log": [], "proc": None,
                         "drive": None, "started": time.time(), "type": "extract", "headed": headed == "1",
                         "reel_kit": kit}
-    save_job_state(job_id=job_id, url=url, stage="extracting", status="running",
-                   events=[], tool=tool_title, slug=slug, out_dir=OUT)
+    save_extract_job(job_id, "extracting")
     threading.Thread(target=asset_worker, args=(job_id,), daemon=True).start()
     return {"job": job_id, "slug": slug, "already_running": False}
 
@@ -504,22 +572,20 @@ def extract_result(name: str):
 def job_status(job_id: str, since: int = 0):
     job = jobs.get(job_id)
     if not job:
-        persisted = get_job_state(job_id, out_dir=OUT)
+        # ids are uuid4().hex[:8]; anything else never existed (and mustn't reach a file path or Supabase query)
+        persisted = get_job_state(job_id, out_dir=OUT) if re.fullmatch(r"[0-9a-f]{8}", job_id) else None
         if not persisted:
-            # Return structured JSON (not an HTTP exception) so the frontend fetch()
-            # resolves and can show a clear "server restarted" message instead of
-            # hitting the generic network-error handler.
             return JSONResponse(
                 status_code=404,
                 content={
                     "status": "unknown",
-                    "error": "That run isn't known to this server (it may have restarted).",
+                    "error": f"Job '{job_id}' not found or expired.",
                     "lines": [],
                     "next": 0,
                     "slug": "",
                     "tool": "",
-                    "stage": "Server restarted \u2014 job state lost. Please start a new extraction.",
-                    "elapsed": "\u2014",
+                    "stage": "Job not found or expired. Please start a new extraction.",
+                    "elapsed": "—",
                     "drive": None,
                     "index": None,
                     "total": None,
@@ -527,51 +593,32 @@ def job_status(job_id: str, since: int = 0):
                     "results": None,
                 },
             )
-        events = persisted.get("events") or []
-        if isinstance(events, str):
-            try:
-                events = json.loads(events)
-            except Exception:
-                events = [events]
-        lines = events[since:]
-        return {
-            "status": persisted.get("status", "unknown"),
-            "lines": lines,
-            "next": since + len(lines),
-            "slug": persisted.get("slug") or persisted.get("tool") or "",
-            "tool": persisted.get("tool") or "",
-            "stage": persisted.get("stage", ""),
-            "elapsed": "restarted",
-            "drive": persisted.get("drive"),
-            "index": persisted.get("index"),
-            "total": persisted.get("total"),
-            "names": persisted.get("names"),
-            "results": persisted.get("results"),
-        }
+        # Not in memory (e.g. only Supabase kept it across a restart): a stored "running" job is dead.
+        job = jobs.setdefault(job_id, _restore_job(job_id, persisted))
+
     lines = job["log"][since:]
-    stage = ""
-    for ln in reversed(job["log"]):
-        if "[PROGRESS]" in ln:
-            stage = ln.split("[PROGRESS]")[-1].strip()
-            break
-        elif "Downloaded " in ln and " files" in ln:
-            stage = ln.strip()
-            break
-        elif "Scrolling " in ln:
-            stage = "Scrolling page..."
-            break
-        elif "Navigating to " in ln:
-            stage = "Navigating to page..."
-            break
-        elif ln.startswith("> "):
-            stage = ln.strip()[2:].rstrip(" .")
-            break
-    secs = int(time.time() - job["started"])
-    return {"status": job["status"], "lines": lines, "next": since + len(lines), "slug": job["slug"],
-            "tool": job["tool"], "stage": stage if job["status"] == "running" else "",
-            "elapsed": f"{secs // 60}:{secs % 60:02d}", "drive": job["drive"],
-            "index": job.get("index"), "total": len(job.get("urls") or []) or None, "names": job.get("names"),
-            "results": job.get("results")}
+    if job["status"] in ("running", "stopping"):
+        stage = extract_stage_from_log(job["log"]) or job.get("stage") or ""
+    else:  # the final outcome (e.g. which stage failed and why), not the last log line
+        stage = job.get("stage") or extract_stage_from_log(job["log"]) or job["status"].capitalize()
+
+    secs = int(time.time() - job["started"]) if job.get("started") else 0
+    elapsed_str = f"{secs // 60}:{secs % 60:02d}" if secs < 86400 else "—"
+    return {
+        "status": job["status"],
+        "type": job.get("type") or "run",
+        "lines": lines,
+        "next": since + len(lines),
+        "slug": job["slug"],
+        "tool": job["tool"],
+        "stage": stage,
+        "elapsed": elapsed_str,
+        "drive": job["drive"],
+        "index": job.get("index"),
+        "total": len(job.get("urls") or []) or None,
+        "names": job.get("names"),
+        "results": job.get("results"),
+    }
 
 
 @app.post("/api/job/{job_id}/stop")

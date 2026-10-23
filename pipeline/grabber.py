@@ -1151,8 +1151,11 @@ def pick_sections(blocks, max_n=MAX_SECTIONS):
             seen.add(key)
             picks.append(b)
     if len(picks) > max_n:
-        idx = sorted({round(i * (len(picks) - 1) / (max_n - 1)) for i in range(max_n)})
-        picks = [picks[i] for i in idx]
+        if max_n <= 1:
+            picks = picks[:max_n]
+        else:
+            idx = sorted({round(i * (len(picks) - 1) / (max_n - 1)) for i in range(max_n)})
+            picks = [picks[i] for i in idx]
     return picks
 
 
@@ -1229,12 +1232,14 @@ def grab(url, tool, out_root="out", seconds=9.0, headed=False, max_sections=MAX_
 
     shot_list, why = load_shot_list(tool_dir)
     if shot_list is None:
-        log.warning("no per-shot clips: %s; recording page sections only", why)
+        # Expected on a full run: grab comes before script. match records the per-shot clips later.
+        log.info("no per-shot clips in grab (%s): recording page sections and site videos; "
+                 "the match stage records per-shot clips once the script stage has written shot_list.json", why)
     else:
         manifest["shot_list"] = str(tool_dir / "shot_list.json")
         manifest["shots"] = _shot_entries(shot_list, old.get("shots", []), tool_dir)
         web = [s for s in manifest["shots"] if s["source"] == "website"]
-        log.info("shot_list.json: %d shots, %d website, %d trial (skipped)", len(manifest["shots"]), len(web),
+        log.info("shot_list.json: %d shots, %d website, %d trial", len(manifest["shots"]), len(web),
                  sum(s["source"] == "trial" for s in manifest["shots"]))
     try:
         if not shutil.which("ffmpeg"):
@@ -1412,9 +1417,9 @@ def _record_library(url, tool_dir, clips_dir, manifest, site_data, seconds, head
             if reasons:
                 log.warning("shot %d: clip saved but fails QA: %s", s["shot"], "; ".join(reasons))
         for s in manifest["shots"]:
-            if s.get("status") == "pending":  # matched but never recorded (e.g. the page broke first)
-                s.update(status="failed", error="matched a section but was not recorded")
-                log.error("shot %d: %s", s["shot"], s["error"])
+            if s.get("status") == "pending":  # not matched to a direct heading
+                s.update(status="missing", error="section not found on page (will check catalog/assets in match stage)")
+                log.info("shot %d: heading not directly on page, will match from catalog/assets", s["shot"])
 
         # ---- pass 2: one retry with motion for clips that came out static ----
         static = [c for c in manifest["library"] + [s for s in manifest["shots"] if s.get("status") == "ok"]
@@ -1432,7 +1437,7 @@ def _record_library(url, tool_dir, clips_dir, manifest, site_data, seconds, head
             max_y = max(0, info["height"] - info["vh"])
             by_title = {bl.get("title"): bl for bl in info["blocks"]}
             for c in static:
-                b = by_title.get(c["section"]) or {"y": c["y"], "h": c["h"]}
+                b = by_title.get(c.get("section")) or {"y": c.get("y", 0), "h": c.get("h", info["vh"])}
                 try:
                     retries.append((c, record_motion(page, b, max_y, info["vh"], seconds, t0)))
                 except Exception as ex:
@@ -1461,6 +1466,73 @@ def _record_library(url, tool_dir, clips_dir, manifest, site_data, seconds, head
                          qa_reasons=reasons + ([f"still static after a retry ({how})"] if still else []),
                          qa_metrics=metrics, retry="still static" if still else f"fixed: {how}")
             log.info("retry %r: %s", c["section"], c["retry"])
+
+
+def record_missing_shot_clips(url, tool_dir, shots, headed=False, seconds=6.0):
+    """Record mobile viewport clips for pending website shots in shot_list.json.
+    Updates each shot entry with file, status, QA metrics, or reports missing if assets are insufficient."""
+    tool_dir = Path(tool_dir)
+    clips_dir = tool_dir / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    pending = [s for s in shots if s.get("source") == "website" and not s.get("file")]
+    if not pending:
+        return shots
+
+    log.info("recording per-shot mobile clips for %d website shot(s)...", len(pending))
+    try:
+        with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
+            browser, ctx, page = _open_session(p, tmp, headed)
+            t0 = time.monotonic()
+            shot_segs = []
+            try:
+                _prepare(page, url)
+                page.evaluate(CURSOR_JS)
+                info = page.evaluate(FIND_BLOCKS_JS)
+                max_y = max(0, info["height"] - info["vh"])
+                vh = info["vh"]
+
+                for s, b in _find_shot_sections(page, pending):
+                    try:
+                        shot_segs.append((s, b, record_shot(page, b, max_y, vh, seconds, t0)))
+                    except Exception as ex:
+                        s.update(status="failed", error=f"recording failed: {str(ex).splitlines()[0]}")
+                        log.error("shot %d: %s", s["shot"], s["error"])
+            finally:
+                webm = _close_session(browser, ctx, page)
+
+            if webm and webm.exists():
+                for s, b, (start, end) in shot_segs:
+                    out = clips_dir / clip_name(s)
+                    try:
+                        cut_clip(webm, start, end, out, seconds)
+                        metrics, reasons = qa.check_clip(out)
+                        s.update(
+                            file=f"clips/{out.name}",
+                            status="ok",
+                            error=None,
+                            seconds=metrics.get("seconds"),
+                            qa="fail" if reasons else "pass",
+                            qa_reasons=reasons,
+                            qa_metrics=metrics,
+                            matched={"by": "mobile_page_section", "heading": b.get("title", ""), "y": b.get("y", 0)},
+                        )
+                        log.info("shot %d clip recorded: %s (qa: %s)", s["shot"], out.name, s["qa"])
+                    except Exception as ex:
+                        s.update(status="failed", error=f"cut failed: {ex}")
+                        log.error("shot %d cut error: %s", s["shot"], ex)
+    except Exception as e:
+        log.warning("could not record per-shot mobile clips: %s", e)
+
+    for s in pending:
+        if not s.get("file"):
+            s.update(
+                file=None,
+                status="missing",
+                error=f"insufficient website assets for visual: '{s.get('visual_needed') or s.get('script_line')}'",
+            )
+            log.warning("shot %d: %s", s["shot"], s["error"])
+
+    return shots
 
 
 def print_summary(m):

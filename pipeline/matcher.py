@@ -185,14 +185,31 @@ def score_catalog_with_llm(script_line, catalog):
     return scores
 
 
-def match(tool, out_root="out"):
-    """Asset-first match: link clip_file if set; else score catalog captions with vision model. Returns manifest."""
-    tool_dir = Path(out_root) / tool
+def match(tool, out_root="out", url=None, headed=False):
+    """Asset-first match: process each shot individually, extract relevant site clips,
+    prioritize mobile UI visuals, and clearly report missing clips."""
+    from . import grabber
+    slug = grabber.slugify(tool)
+    tool_dir = Path(out_root) / slug
     mpath = tool_dir / "manifest.json"
+    if not mpath.exists():
+        raise RuntimeError(f"manifest.json not found in {tool_dir} (grab stage must run first)")
+
     try:
         manifest = json.loads(mpath.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        manifest = {"tool": tool, "url": None, "status": "ok", "error": None, "library": [], "shots": []}
+    except (OSError, ValueError) as e:
+        raise RuntimeError(f"could not read manifest.json: {e}")
+
+    shot_list_path = tool_dir / "shot_list.json"
+    if not shot_list_path.exists():
+        raise RuntimeError(f"shot_list.json not found in {tool_dir} (script stage must run first)")
+
+    try:
+        shot_list = json.loads(shot_list_path.read_text(encoding="utf-8"))
+        if not isinstance(shot_list, list):
+            raise ValueError("shot_list.json is not a list")
+    except Exception as e:
+        raise RuntimeError(f"could not parse shot_list.json: {e}")
 
     # Load clip catalog
     catalog = []
@@ -204,20 +221,7 @@ def match(tool, out_root="out"):
             pass
 
     script_path = tool_dir / "script.txt"
-    shot_list = None
-    try:
-        shot_list = json.loads((tool_dir / "shot_list.json").read_text(encoding="utf-8"))
-        if not isinstance(shot_list, list):
-            shot_list = None
-    except (OSError, ValueError):
-        pass
-
     segments = parse_script(script_path.read_text(encoding="utf-8", errors="replace")) if script_path.exists() else []
-    if not segments and not shot_list:
-        manifest["match"] = {"ok": False, "note": "no script.txt or shot_list.json to build shots from"}
-        manifest["shots"] = []
-        _save(manifest, mpath, tool_dir)
-        return manifest
 
     shots = build_shots(segments, shot_list)
     kept = {s["shot"]: s for s in manifest.get("shots", [])
@@ -237,23 +241,36 @@ def match(tool, out_root="out"):
 
         if s.get("source") == "trial":
             s.update(status="needs_trial", file=None, match_score=0.0,
-                     error="trial shot: needs recording inside tool")
+                     error="trial shot: needs recording inside tool (manual trial-recording fallback)")
             continue
 
         # Rule 1: if shot already has clip_file from asset-first script, link it
         clip_req = s.get("clip_file")
-        if clip_req and (tool_dir / clip_req).exists():
-            s.update(file=clip_req, status="ok", match_score=1.0,
-                     matched={"clip": clip_req, "score": 1.0, "type": "script_specified"})
-            used_files.add(clip_req)
+        if clip_req:
+            p_req = tool_dir / clip_req
+            if not p_req.exists():
+                p_req = tool_dir / "clips" / Path(clip_req).name
+            if p_req.exists():
+                rel = str(p_req.relative_to(tool_dir)).replace("\\", "/")
+                s.update(file=rel, status="ok", match_score=1.0,
+                         matched={"clip": rel, "score": 1.0, "type": "script_specified"})
+                used_files.add(rel)
+                continue
+
+        # Rule 1b: a per-shot clip grab already recorded for this exact shot (the name carries
+        # the visual, so a clip left from an older script with a different visual isn't reused)
+        if s.get("visual_needed") and (tool_dir / "clips" / grabber.clip_name(s)).is_file():
+            rel = f"clips/{grabber.clip_name(s)}"
+            s.update(file=rel, status="ok", match_score=1.0,
+                     matched={"clip": rel, "score": 1.0, "type": "per_shot_clip"})
+            used_files.add(rel)
             continue
 
-        # Rule 2: if no clip_file or file missing, score catalog captions with vision model
+        # Rule 2: score catalog clips with vision model / LLM
         scores = score_catalog_with_llm(s["script_line"], catalog)
-        available = [(f, sc) for f, sc in scores.items() if (tool_dir / f).exists()]
+        available = [(f, sc) for f, sc in scores.items() if (tool_dir / f).exists() and f not in used_files]
         available.sort(key=lambda x: -x[1])
 
-        # Pick best scoring clip
         best_match = None
         for f, sc in available:
             if sc >= MIN_CONFIDENCE:
@@ -265,14 +282,42 @@ def match(tool, out_root="out"):
             s.update(file=f, status="ok", match_score=round(sc, 2),
                      matched={"clip": f, "score": round(sc, 2), "type": "vision_score"})
             used_files.add(f)
-        elif catalog and (tool_dir / catalog[0]["file"]).exists():
-            # Fall back to best available catalog clip with low score note
-            fallback = catalog[0]["file"]
-            s.update(file=fallback, status="ok", match_score=0.4,
-                     matched={"clip": fallback, "score": 0.4, "type": "catalog_fallback"})
-        else:
+            continue
+
+        # Rule 3: check site videos / library clips by keyword matching
+        words = set(re.findall(r"\w+", (s.get("visual_needed", "") + " " + s.get("script_line", "")).lower()))
+        best_lib = None
+        best_overlap = 0
+        for entry in manifest.get("library", []):
+            f = entry.get("file")
+            if not f or not (tool_dir / f).exists() or f in used_files:
+                continue
+            entry_words = set(re.findall(r"\w+", (entry.get("section", "") + " " + entry.get("text", "")).lower()))
+            overlap = len(words & entry_words)
+            if overlap > best_overlap and overlap >= 2:
+                best_overlap = overlap
+                best_lib = f
+
+        if best_lib:
+            s.update(file=best_lib, status="ok", match_score=round(min(1.0, 0.4 + best_overlap * 0.15), 2),
+                     matched={"clip": best_lib, "score": round(min(1.0, 0.4 + best_overlap * 0.15), 2), "type": "keyword_match"})
+            used_files.add(best_lib)
+            continue
+
+    # Attempt mobile per-shot recording for any pending website shots
+    site_url = url or manifest.get("url")
+    pending_website = [s for s in shots if s.get("source") == "website" and not s.get("file")]
+    if pending_website and site_url:
+        try:
+            grabber.record_missing_shot_clips(site_url, tool_dir, shots, headed=headed)
+        except Exception as e:
+            print(f"  [warn] per-shot recording exception: {e}")
+
+    # Mark any shots that still lack clips as missing (no silent catalog fallback)
+    for s in shots:
+        if s.get("source") == "website" and not s.get("file"):
             s.update(file=None, status="missing", match_score=0.0,
-                     error="no matching clip found in catalog")
+                     error=f"insufficient website assets for visual: '{s.get('visual_needed') or s.get('script_line')}'")
 
     manifest["shots"] = shots
     matched_count = sum(bool(s.get("file")) for s in shots)

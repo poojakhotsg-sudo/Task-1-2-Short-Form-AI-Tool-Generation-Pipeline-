@@ -15,3 +15,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# durable job store (pipeline/db.py)
+data/jobs.db

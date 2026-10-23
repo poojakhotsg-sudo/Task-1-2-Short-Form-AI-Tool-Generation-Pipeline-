@@ -4,12 +4,18 @@ run.py - run the whole pipeline for one tool.
     python run.py --tool "Pomelli" --url https://labs.google.com/pomelli --num 01
     python run.py --tool "Gamma" --url https://gamma.app --stages grab,qa
 
-Stages, in order: script, grab, qa, match, trial, qa2, assemble, upload.
-(grab records one clip per page section; match builds the shots from script.txt
-and picks the best clip for each.)
-trial only runs if shots failed QA and auth_<tool>.json exists. A stage that
-errors is logged and the run carries on. Each stage's result goes to
-out/<tool>/run.log, and the run adds a row to out/results.csv.
+Stages, in order: grab, describe, script, match, qa, trial, assemble, upload.
+grab records one clip per page section plus the site's videos/embeds (mobile viewport);
+describe catalogs those clips; script writes script.txt + shot_list.json from the site
+text and the catalog; match then works through shot_list.json one shot at a time,
+linking a catalog clip or recording a mobile clip of the matching page section, and
+marks a shot "missing" when the website has nothing for it.
+trial only runs if shots failed QA and auth_<tool>.json exists (otherwise the shot stays
+for manual upload). A stage whose inputs are missing, or whose prerequisite stage
+errored, is skipped with the reason; other stages carry on. Each stage's start, result
+and output files go to out/<tool>/run.log, and the run adds a row to out/results.csv.
+The process exits 1 if any stage errored, after a "[STAGE-ERROR] <stage>: <reason>" line
+per error, so the web UI can show why.
 """
 
 import argparse
@@ -28,6 +34,15 @@ ROOT = Path(__file__).resolve().parent.parent
 ALL_STAGES = ["grab", "describe", "script", "match", "qa", "trial", "assemble", "upload"]
 DEFAULT_STAGES = ["grab", "describe", "script", "match", "qa", "trial", "assemble"]
 CSV_FIELDS = ["date", "tool", "website_shots_passed", "trial_shots_needed", "needs_manual", "errors"]
+# A stage is skipped when one of these errored or was skipped earlier in the same run.
+STAGE_DEPS = {
+    "describe": ["grab"],
+    "match": ["grab", "script"],
+    "qa": ["match"],
+    "trial": ["match"],
+    "assemble": ["match"],
+    "upload": ["assemble"],
+}
 
 
 class Skip(Exception):
@@ -55,45 +70,98 @@ def run_pipeline(url, tool, stages=DEFAULT_STAGES, out_root="out", log=print, di
     tool_dir = Path(out_root) / slug
     tool_dir.mkdir(parents=True, exist_ok=True)
     auth_file = ROOT / f"auth_{slug}.json"
+    shot_list = tool_dir / "shot_list.json"
+    prev_shot_list = tool_dir / "shot_list.prev.json"
+
+    # A shot list left from an earlier run describes an old script. If this run writes a new
+    # one, park the old one so grab doesn't spend time recording clips for stale shots;
+    # it's put back if the script stage fails.
+    if ("grab" in stages and "script" in stages and stages.index("grab") < stages.index("script")
+            and shot_list.exists()):
+        os.replace(shot_list, prev_shot_list)
+        log(f"  parked the previous shot_list.json as {prev_shot_list.name} (script will write a new one)")
+    elif "grab" in stages and "script" not in stages and not shot_list.exists():
+        log("  [warn] no shot_list.json and the script stage is not in this run: grab will record page "
+            "sections only, and match will have no shots to work through")
 
     def grab():
         m = grabber.grab(url, slug, out_root, headed=headed)
-        if m["status"] != "ok":
-            raise RuntimeError(f"grab {m['status']}: {m['error']}")
+        if m.get("status") != "ok":
+            raise RuntimeError(f"grab {m.get('status')}: {m.get('error') or 'unknown error'}")
         try:
             from extract_assets import extract as run_extract_assets
-            run_extract_assets(url, tool_dir / "assets", tool=display_name or tool)  # own manifest.json, never the pipeline's
+            assets_dir = tool_dir / "assets"
+            assets_dir.mkdir(parents=True, exist_ok=True)
+            run_extract_assets(url, assets_dir, tool=display_name or tool)
         except Exception as e:
             log(f"  [warn] extract_assets error: {e}")
-        lib = m["library"]
+        lib = m.get("library") or []
         ok = sum(c.get("qa") == "pass" for c in lib)
+        log(f"  [grab] output files in {tool_dir}: manifest.json, site_data.json, clips/ "
+            f"({len(lib)} section clips, {len(m.get('site_videos') or [])} site videos), assets/")
         return (f"{len(lib)} section clips & segments ({ok} pass QA), "
-                f"{len(m['site_videos'])} site videos")
+                f"{len(m.get('site_videos') or [])} site videos")
 
     def describe():
+        manifest_path = tool_dir / "manifest.json"
+        clips_dir = tool_dir / "clips"
+        if not manifest_path.exists() or not clips_dir.exists():
+            raise RuntimeError("describe requires manifest.json and clips/ (grab stage must run first)")
         catalog = describer.describe(slug, out_root)
         ui_count = sum(bool(c.get("has_ui")) for c in catalog)
+        log(f"  [describe] output file: clip_catalog.json ({len(catalog)} clips cataloged)")
         return f"{len(catalog)} clips described ({ui_count} with UI) in clip_catalog.json"
 
     def script():
-        _, shot_path = script_gen.generate(slug, url, out_root)
-        shots = json.loads(Path(shot_path).read_text(encoding="utf-8"))
+        tool_dir.mkdir(parents=True, exist_ok=True)
+        if not (tool_dir / "clip_catalog.json").exists():
+            log("  [script] no clip_catalog.json (describe didn't run or failed): "
+                "the script won't reference specific site clips")
+        try:
+            _, shot_path = script_gen.generate(slug, url, out_root)
+            shot_path = Path(shot_path)
+            if not shot_path.exists():
+                raise RuntimeError(f"script stage did not write {shot_path.name}")
+            shots = json.loads(shot_path.read_text(encoding="utf-8"))
+            if not isinstance(shots, list) or not shots:
+                raise RuntimeError(f"{shot_path.name} has no shots")
+        except BaseException:
+            if prev_shot_list.exists() and not shot_list.exists():
+                os.replace(prev_shot_list, shot_list)
+                log("  [script] restored the previous shot_list.json")
+            raise
+        prev_shot_list.unlink(missing_ok=True)
         trial = [s["shot"] for s in shots if s.get("source") == "trial"]
+        log(f"  [script] output files: {tool_dir / 'script.txt'}, {shot_path} ({len(shots)} shots)")
         return f"{len(shots)} shots, trial shots: {trial or 'none'}"
 
     def match():
-        _manifest(tool_dir)
-        m = matcher.match(slug, out_root)
+        if not (tool_dir / "manifest.json").exists():
+            raise RuntimeError("match requires manifest.json (grab stage must run first)")
+        if not (tool_dir / "shot_list.json").exists():
+            raise RuntimeError("match requires shot_list.json (script stage must run first)")
+        m = matcher.match(slug, out_root, url=url, headed=headed)
         if not m.get("match", {}).get("ok"):
             raise RuntimeError(m.get("match", {}).get("note", "could not build shots"))
         web = [s for s in m["shots"] if s.get("source") == "website"]
         got = sum(bool(s.get("file")) for s in web)
+        missing = [s for s in web if not s.get("file")]
+        for s in m["shots"]:
+            if s.get("file"):
+                how = (s.get("matched") or {}).get("type") or (s.get("matched") or {}).get("by") or "linked"
+                log(f"  [match] shot {s['shot']}: {s['file']} ({how})")
+            else:
+                log(f"  [match] MISSING shot {s['shot']} ({s.get('source')}): {s.get('error') or 'no clip'}")
+        log(f"  [match] output: {tool_dir / 'manifest.json'} ({got}/{len(web)} website shots have a clip, "
+            f"{len(missing)} missing)")
         return (f"{len(m['shots'])} shots from the script, {got}/{len(web)} website shots matched, "
                 f"{len(m['shots']) - len(web)} trial")
 
     def run_qa():
-        _manifest(tool_dir)
+        if not _manifest(tool_dir).get("shots"):
+            raise RuntimeError("qa requires shots in manifest.json (match stage must run first)")
         m = qa.run_qa(slug, out_root)
+        log(f"  [qa] output files: {tool_dir / 'manifest.json'}, {tool_dir / 'qa_report.json'}")
         return _qa_summary(m)
 
     def trial():
@@ -102,16 +170,21 @@ def run_pipeline(url, tool, stages=DEFAULT_STAGES, out_root="out", log=print, di
             raise Skip("no shots failed QA")
         if not auth_file.exists():
             log(f"  run login_once.py first:  python login_once.py {slug} <signup_url>")
-            raise Skip(f"{auth_file.name} not found, run login_once.py")
+            raise Skip(f"{auth_file.name} not found, run login_once.py (keeping manual fallback)")
         results = trial_recorder.record(slug, None, out_root)
         done = sum(r["status"] == "recorded" for r in results)
         return f"{done}/{len(results)} recorded, {len(results) - done} needs manual"
 
     def assemble():
-        _manifest(tool_dir)
+        m = _manifest(tool_dir)
+        if not m.get("shots"):
+            raise RuntimeError("assemble requires shots in manifest.json (match stage must run first)")
+        if not any(s.get("file") and (tool_dir / s["file"]).exists() for s in m["shots"]):
+            log("  [assemble] no shot has a clip yet: the rough cut will be all placeholders")
         path = assembler.assemble(slug, out_root)
         if path is None:
             raise RuntimeError("nothing to cut")
+        log(f"  [assemble] output files: {path}, {tool_dir / 'summary.md'}")
         return f"{path.name} ({qa.probe(path)[0]:.1f}s) + summary.md"
 
     def upload():
@@ -124,7 +197,18 @@ def run_pipeline(url, tool, stages=DEFAULT_STAGES, out_root="out", log=print, di
              "qa": run_qa, "trial": trial, "assemble": assemble, "upload": upload}
 
     results = {}
+    failed_stages = set()
     for stage in stages:
+        deps = STAGE_DEPS.get(stage, [])
+        failed_prereq = next((d for d in deps if d in failed_stages), None)
+        if failed_prereq:
+            summary = f"skipped because dependency '{failed_prereq}' failed"
+            status = "skipped"
+            results[stage] = {"status": status, "summary": summary}
+            log(f"> {stage} ... SKIPPED ({summary})")
+            failed_stages.add(stage)  # stages that need this one are skipped too
+            continue
+
         log(f"> {stage} ...")
         t0 = time.monotonic()
         try:
@@ -135,7 +219,9 @@ def run_pipeline(url, tool, stages=DEFAULT_STAGES, out_root="out", log=print, di
             summary, status = "not built yet", "skipped"
         except Exception as e:
             summary, status = (str(e).splitlines()[0] if str(e) else type(e).__name__), "error"
+            failed_stages.add(stage)
             logging.getLogger("run").debug(traceback.format_exc())
+            log(f"[STAGE-ERROR] {stage}: {summary}")
         results[stage] = {"status": status, "summary": summary}
         log(f"  {stage}: {status.upper()} ({time.monotonic() - t0:.0f}s) - {summary}")
     return results
@@ -211,6 +297,8 @@ def main():
     logger.info(f"log: {tool_dir / 'run.log'}  |  results: {csv_path}")
     if results.get("upload", {}).get("status") == "ok":
         logger.info(f"Drive folder: {results['upload']['summary']}")
+    if any(r["status"] == "error" for r in results.values()):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

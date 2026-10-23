@@ -618,13 +618,26 @@ function attachAssetJob(jobId, toolName, slug) {
       return;
     }
 
-    // Job not found on server (e.g. server restarted and lost in-memory state)
+    // Job not found on server or expired
     if (r.status === "unknown") {
       $("assetProgressDot").className = "dot failed";
-      $("assetProgressText").textContent = r.stage || r.error || "Server restarted — job state lost. Please start a new extraction.";
-      $("assetStatusBadge").textContent = "Job lost";
+      $("assetProgressText").textContent = r.stage || r.error || "Job not found or expired. Please start a new extraction.";
+      $("assetStatusBadge").textContent = "Not found";
       $("runExtractBtn").disabled = false;
       $("extractBtn").disabled = false;
+      state.job = null;
+      store.remove("lastJob");
+      return;
+    }
+
+    if (r.status === "interrupted") {
+      $("assetProgressDot").className = "dot failed";
+      $("assetProgressText").textContent = r.stage || "Extraction was interrupted by a server restart. Please start a new extraction.";
+      $("assetStatusBadge").textContent = "Interrupted";
+      $("runExtractBtn").disabled = false;
+      $("extractBtn").disabled = false;
+      state.job = null;
+      store.remove("lastJob");
       return;
     }
 
@@ -659,7 +672,7 @@ function attachAssetJob(jobId, toolName, slug) {
     $("assetProgressBar").style.width = "100%";
     const kitRes = (r.results || []).find((x) => x.reel_kit);
     const kitFailed = kitRes && kitRes.reel_kit !== "ok";
-    $("assetProgressText").textContent = r.status !== "done" ? `Finished: ${r.status}`
+    $("assetProgressText").textContent = r.status !== "done" ? `Finished: ${r.status}${r.stage && r.stage.toLowerCase() !== r.status ? " — " + r.stage : ""}`
       : !kitRes ? "Extraction complete!"
       : kitFailed ? `Extraction complete. Reel Kit ${kitRes.reel_kit}: ${kitRes.reel_kit_error || "extraction failed"}`
       : "Extraction and Reel Kit complete!";
@@ -691,11 +704,25 @@ async function pollJob(jobId) {
     // Network error — retry
     setTimeout(() => pollJob(jobId), 2000); return;
   }
-  // Job not found on server (e.g. after a restart)
+  // Job not found on server or expired
   if (r.status === "unknown") {
-    $("logState").textContent = r.stage || r.error || "Server restarted — job lost.";
+    $("logState").textContent = r.stage || r.error || "Job not found or expired. Please start a new extraction.";
     $("dot").className = "dot failed";
     $("stopBtn").hidden = true;
+    $("runBtn").disabled = false;
+    $("extractBtn").disabled = false;
+    state.job = null;
+    store.remove("lastJob");
+    return;
+  }
+  if (r.status === "interrupted") {
+    $("logState").textContent = r.stage || "Extraction was interrupted by a server restart. Please start a new extraction.";
+    $("dot").className = "dot failed";
+    $("stopBtn").hidden = true;
+    $("runBtn").disabled = false;
+    $("extractBtn").disabled = false;
+    state.job = null;
+    store.remove("lastJob");
     return;
   }
   const log = $("log");
@@ -1412,7 +1439,24 @@ $("fileInput").addEventListener("change", (e) => {
   const r = await refreshTools();
   const fromHash = decodeURIComponent(location.hash.slice(1));
   const running = r && Object.entries(r.running)[0];
-  if (running) attachJob(running[1], running[0]);
+  if (running) {
+    attachJob(running[1], running[0]);
+  } else {
+    const lastJob = store.get("lastJob");
+    if (lastJob) {
+      try {
+        const j = await api(`/api/job/${lastJob}`);
+        if (j && (j.status === "running" || j.status === "stopping")) {
+          if (j.type === "extract") attachAssetJob(lastJob, j.tool, j.slug);
+          else attachJob(lastJob, j.tool);
+        } else if (j && (j.status === "unknown" || j.status === "interrupted")) {
+          store.remove("lastJob");
+        }
+      } catch (e) {
+        // ignore network error on startup
+      }
+    }
+  }
   const slug = (fromHash && r && r.tools.some((t) => t.slug === fromHash)) ? fromHash
              : running ? running[0] : store.get("lastTool");
   if (slug && r && r.tools.some((t) => t.slug === slug)) openTool(slug);
