@@ -457,20 +457,29 @@ if (window.location.hostname.includes("github.io") || window.location.protocol =
   if (b) b.style.display = "block";
 }
 
+const BACKEND_URL = "https://task-1-2-short-form-ai-tool-generation-6d95.onrender.com";
+const IS_STATIC = window.location.hostname.includes("github.io") ||
+                  window.location.hostname.includes(".vercel.app") ||
+                  window.location.protocol === "file:";
+function resolveUrl(path) {
+  return IS_STATIC ? BACKEND_URL + path : path;
+}
+
 async function api(path, opts) {
+  const url = resolveUrl(path);
   try {
-    const res = await fetch(path, opts);
+    const res = await fetch(url, opts);
     let body = null;
     try { body = await res.json(); } catch (e) {}
     if (!res.ok) {
-      if (res.status === 404 && (window.location.hostname.includes("github.io") || window.location.protocol === "file:")) {
+      if (res.status === 404 && IS_STATIC) {
         throw new Error("Backend server is not running on GitHub Pages (static host). Deploy to Render/Railway or run 'python app.py' locally.");
       }
       throw new Error((body && body.error) || `Request failed (${res.status})`);
     }
     return body;
   } catch (err) {
-    if (window.location.hostname.includes("github.io") || window.location.protocol === "file:") {
+    if (IS_STATIC) {
       throw new Error("Backend server is not reachable on GitHub Pages. Run 'python app.py' locally or deploy on Render/Railway.");
     }
     throw err;
