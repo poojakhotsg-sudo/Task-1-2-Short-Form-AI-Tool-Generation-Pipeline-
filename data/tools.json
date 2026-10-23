@@ -53,5 +53,15 @@
     "price_tier": "free",
     "checkout_url": "",
     "comment_keyword": ""
+  },
+  "google-flow.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
+  },
+  "canva.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
   }
 }
