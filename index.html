@@ -472,8 +472,11 @@ async function api(path, opts) {
     let body = null;
     try { body = await res.json(); } catch (e) {}
     if (!res.ok) {
-      if (res.status === 404 && IS_STATIC) {
-        throw new Error("Backend server is not running on GitHub Pages (static host). Deploy to Render/Railway or run 'python app.py' locally.");
+      // Special case: /api/job/<id> returns 404 with a structured JSON body
+      // when the job is not found (e.g. after a server restart). Pass it through
+      // so the poll loop can handle it gracefully instead of throwing.
+      if (res.status === 404 && body && body.status === "unknown") {
+        return body;
       }
       throw new Error((body && body.error) || `Request failed (${res.status})`);
     }
@@ -610,13 +613,18 @@ function attachAssetJob(jobId, toolName, slug) {
     try {
       r = await api(`/api/job/${jobId}?since=${state.since}`);
     } catch (e) {
-      if (/isn't known/.test(e.message)) {
-        $("assetProgressText").textContent = e.message;
-        $("runExtractBtn").disabled = false;
-        $("extractBtn").disabled = false;
-        return;
-      }
-      setTimeout(poll, 1500);
+      // Network error (CORS, timeout, etc.) — retry after a brief pause
+      setTimeout(poll, 2000);
+      return;
+    }
+
+    // Job not found on server (e.g. server restarted and lost in-memory state)
+    if (r.status === "unknown") {
+      $("assetProgressDot").className = "dot failed";
+      $("assetProgressText").textContent = r.stage || r.error || "Server restarted — job state lost. Please start a new extraction.";
+      $("assetStatusBadge").textContent = "Job lost";
+      $("runExtractBtn").disabled = false;
+      $("extractBtn").disabled = false;
       return;
     }
 
@@ -680,8 +688,15 @@ async function pollJob(jobId) {
   let r;
   try { r = await api(`/api/job/${jobId}?since=${state.since}`); }
   catch (e) {
-    if (/isn't known/.test(e.message)) { $("logState").textContent = e.message; $("stopBtn").hidden = true; return; }
+    // Network error — retry
     setTimeout(() => pollJob(jobId), 2000); return;
+  }
+  // Job not found on server (e.g. after a restart)
+  if (r.status === "unknown") {
+    $("logState").textContent = r.stage || r.error || "Server restarted — job lost.";
+    $("dot").className = "dot failed";
+    $("stopBtn").hidden = true;
+    return;
   }
   const log = $("log");
   if (r.lines.length) {

@@ -6,7 +6,7 @@ services:
     region: oregon
     dockerfilePath: Dockerfile
     envVars:
-      - key: GROK_API_KEY
+      - key: GROQ_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false

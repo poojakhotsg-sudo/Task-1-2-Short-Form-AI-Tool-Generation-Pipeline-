@@ -67,6 +67,49 @@ app.mount("/out", StaticFiles(directory=OUT), name="out")
 
 jobs = {}  # job_id -> {"tool", "slug", "url", "num", "status", "log", "proc", "drive", "started"}
 lock = threading.Lock()
+_process_start = time.time()  # used to detect recent restarts
+
+
+def _recover_jobs_from_disk():
+    """On startup, reload any finished/interrupted jobs from the .jobs/ disk cache
+    so GET /api/job/<id> doesn't 404 for jobs that completed before a restart."""
+    jobs_dir = OUT / ".jobs"
+    if not jobs_dir.is_dir():
+        return
+    count = 0
+    for p in jobs_dir.glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            jid = data.get("job_id") or p.stem
+            if jid and jid not in jobs:
+                events = data.get("events") or []
+                if isinstance(events, str):
+                    try:
+                        events = json.loads(events)
+                    except Exception:
+                        events = [events]
+                jobs[jid] = {
+                    "tool": data.get("tool") or data.get("slug") or "",
+                    "slug": data.get("slug") or data.get("tool") or "",
+                    "url": data.get("url") or "",
+                    "num": "",
+                    "status": data.get("status") or "done",
+                    "log": events,
+                    "proc": None,
+                    "drive": data.get("drive"),
+                    "started": _process_start,
+                    "_recovered": True,
+                }
+                count += 1
+        except Exception:
+            pass
+    if count:
+        print(f"[startup] recovered {count} jobs from disk cache", flush=True)
+
+
+_recover_jobs_from_disk()
+print(f"[startup] reel-pipeline ready (out={OUT})", flush=True)
+
 
 
 def is_job_running():
@@ -463,7 +506,27 @@ def job_status(job_id: str, since: int = 0):
     if not job:
         persisted = get_job_state(job_id, out_dir=OUT)
         if not persisted:
-            raise HTTPException(404, "That run isn't known to this server (it may have restarted).")
+            # Return structured JSON (not an HTTP exception) so the frontend fetch()
+            # resolves and can show a clear "server restarted" message instead of
+            # hitting the generic network-error handler.
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "unknown",
+                    "error": "That run isn't known to this server (it may have restarted).",
+                    "lines": [],
+                    "next": 0,
+                    "slug": "",
+                    "tool": "",
+                    "stage": "Server restarted \u2014 job state lost. Please start a new extraction.",
+                    "elapsed": "\u2014",
+                    "drive": None,
+                    "index": None,
+                    "total": None,
+                    "names": None,
+                    "results": None,
+                },
+            )
         events = persisted.get("events") or []
         if isinstance(events, str):
             try:
