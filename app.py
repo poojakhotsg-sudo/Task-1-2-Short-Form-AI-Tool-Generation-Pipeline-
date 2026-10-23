@@ -31,6 +31,7 @@ import hmac
 from datetime import datetime
 
 from fastapi import BackgroundTasks, Body, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -51,6 +52,17 @@ DRIVE_RE = re.compile(r"https://drive\.google\.com/drive/folders/[\w-]+")
 MAX_UPLOAD_MB = 1000
 
 app = FastAPI(title="reel-pipeline")
+
+# Allow cross-origin requests so a static frontend (GitHub Pages, Vercel, etc.)
+# can call this Render-hosted backend.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/out", StaticFiles(directory=OUT), name="out")
 
 jobs = {}  # job_id -> {"tool", "slug", "url", "num", "status", "log", "proc", "drive", "started"}

@@ -479,8 +479,8 @@ async function api(path, opts) {
     }
     return body;
   } catch (err) {
-    if (IS_STATIC) {
-      throw new Error("Backend server is not reachable on GitHub Pages. Run 'python app.py' locally or deploy on Render/Railway.");
+    if (IS_STATIC && (err.name === "TypeError" || err.message === "Failed to fetch")) {
+      throw new Error(`Cannot reach backend at ${BACKEND_URL}. Check CORS settings or that the Render service is running. (${err.message})`);
     }
     throw err;
   }
