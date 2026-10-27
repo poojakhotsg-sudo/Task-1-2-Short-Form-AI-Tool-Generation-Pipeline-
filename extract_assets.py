@@ -34,9 +34,10 @@ import tempfile
 import threading
 import time
 import unicodedata
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 import requests
 from playwright.sync_api import Error as PWError
@@ -78,7 +79,7 @@ BACKOFF = [5, 10, 20]                 # 3 retries after the first try; the last 
 MIN_BYTES = 5 * 1024                  # stills only
 NEAR_DUP = 4                          # phash distance
 MAX_SCROLL_STEPS = 120
-MAX_CLICKS = 30
+MAX_CLICKS = 40
 MAX_VIDEOS = 30
 MAX_HLS = 5
 MAX_BYTES = 500 * 1024 * 1024
@@ -95,19 +96,40 @@ FAVICON_RE = re.compile(r"favicon|apple-touch-icon|mstile|android-chrome-\d+|/ic
 TRACKING_RE = re.compile(r"pixel|beacon|/collect\?|facebook\.com/tr|doubleclick|analytics|/track", re.I)
 BOT_RE = re.compile(r"verify you are human|are you a robot|checking your browser|attention required|"
                     r"access denied|captcha|unusual traffic|just a moment", re.I)
-SHOW_MORE_RE = re.compile(r"^\s*(show|see|view|load|read)\s+(more|all)\b", re.I)
+CAROUSEL_NEXT = ", ".join([
+    "button[aria-label*='next' i]", "[role=button][aria-label*='next' i]", "button[aria-label*='forward' i]",
+    "button[title*='next' i]", "[data-testid*='next' i]", ".swiper-button-next", ".slick-next",
+    ".carousel-control-next", ".splide__arrow--next", ".flickity-prev-next-button.next", ".glide__arrow--right",
+    "[class*='carousel' i] [class*='next' i]", "[class*='slider' i] [class*='next' i]", "[class*='arrow-right' i]",
+])
+SHOW_MORE_RE =re.compile(r"^\s*(show|see|view|load|read)\s+(more|all)\b", re.I)
 CT_EXT = {"image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
           "image/avif": ".avif", "image/apng": ".png", "image/svg+xml": ".svg", "image/x-icon": ".ico",
           "image/vnd.microsoft.icon": ".ico", "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov",
           "video/ogg": ".ogv", "application/vnd.apple.mpegurl": ".m3u8", "application/x-mpegurl": ".m3u8"}
 
 COOKIE_SELECTORS = [
-    "#onetrust-accept-btn-handler", "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
-    "button#accept-cookies", "[data-testid*='cookie' i] button", ".cc-allow", ".cc-btn.cc-dismiss",
+    "#onetrust-accept-btn-handler", "#accept-recommended-btn-handler",
+    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll", "#CybotCookiebotDialogBodyButtonAccept",
+    "#didomi-notice-agree-button", ".osano-cm-accept-all", "#truste-consent-button", ".fc-cta-consent",
+    ".qc-cmp2-summary-buttons button[mode='primary']", "button#accept-cookies",
+    "[data-testid*='cookie' i] button", ".cc-allow", ".cc-btn.cc-dismiss",
     "button[aria-label*='accept' i]", "button[aria-label*='agree' i]",
 ]
 COOKIE_TEXT = re.compile(r"^\s*(accept( all)?( cookies)?|allow( all)?( cookies)?|agree|i agree|got it|ok(ay)?|"
                          r"consent|yes,? i agree|reject( all)?|decline)\s*$", re.I)
+# Consent banners that wouldn't close: hide them and give the page its scrolling back.
+CONSENT_HIDE_JS = """() => {
+  const sel = '#onetrust-consent-sdk, #CybotCookiebotDialog, #didomi-host, .osano-cm-window, #truste-consent-track, ' +
+              '.fc-consent-root, .qc-cmp2-container, [id*="cookie-banner" i], [class*="cookie-banner" i], ' +
+              '[id*="consent-banner" i], [class*="consent-banner" i], [aria-label*="cookie" i][role="dialog"]';
+  let n = 0;
+  for (const el of document.querySelectorAll(sel)) {
+    if (el.offsetParent !== null || getComputedStyle(el).position === 'fixed') { el.style.setProperty('display', 'none', 'important'); n++; }
+  }
+  if (n) for (const el of [document.documentElement, document.body]) { el.style.overflow = 'auto'; el.style.position = ''; }
+  return n;
+}"""
 
 try:
     from pipeline.grabber import CHAT_WIDGET_CSS
@@ -507,9 +529,28 @@ def humans(n):
     return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{n / 1024:.0f} KB"
 
 
+def dismiss_consent(page, rounds=3):
+    """Click cookie/consent banners away, a few rounds (CMPs often slide in late or stack a
+    second "confirm" layer); then hide any that are still showing. Returns buttons clicked."""
+    total = 0
+    for _ in range(rounds):
+        n = close_cookie_popups(page)
+        total += n
+        if not n:
+            break
+        page.wait_for_timeout(700)
+    try:
+        hidden = page.evaluate(CONSENT_HIDE_JS)
+    except PWError:
+        hidden = 0
+    if total or hidden:
+        log.info("consent banners: clicked %d button(s), hid %d leftover banner(s)", total, hidden)
+    return total
+
+
 def close_cookie_popups(page):
     clicked = 0
-    for frame in page.frames[:6]:
+    for frame in page.frames[:10]:  # CMPs like Sourcepoint/TrustArc render inside an iframe
         for sel in COOKIE_SELECTORS:
             try:
                 loc = frame.locator(sel).first
@@ -605,9 +646,49 @@ def record_media(resp, state):
     if resp.status >= 400:
         return
     if is_video_url(url, ct):
-        state["network"].setdefault(url, {"kind": "video", "ct": ct})
+        state["network"].setdefault(url, {"kind": "video", "ct": ct, "type": "video"})
     elif rt == "image" or ct.startswith("image/"):
-        state["network"].setdefault(url, {"kind": "img", "ct": ct})
+        ext = Path(urlparse(url).path).suffix.lower()
+        mtype = "gif" if ct == "image/gif" or ext == ".gif" else "webp" if ct == "image/webp" or ext == ".webp" else "image"
+        state["network"].setdefault(url, {"kind": "img", "ct": ct, "type": mtype})
+
+
+def network_counts(state):
+    """Media URLs seen in network responses, by type: video, gif, webp, image (other stills)."""
+    counts = {"video": 0, "gif": 0, "webp": 0, "image": 0}
+    for it in state["network"].values():
+        counts[it.get("type", "image")] += 1
+    return counts
+
+
+# Query params that only change size/format/tracking: the same asset with different ones is one asset.
+VARIANT_PARAMS = re.compile(r"^(w|h|width|height|q|quality|fm|format|auto|fit|crop|dpr|s|size|resize|"
+                            r"utm_\w+|v|ver|version|cb|_)$", re.I)
+
+
+def asset_key(url):
+    p = urlparse(url)
+    query = sorted(kv for kv in parse_qsl(p.query, keep_blank_values=True) if not VARIANT_PARAMS.match(kv[0]))
+    return (p.netloc.lower(), p.path, tuple(query))
+
+
+def dedupe_candidates(cands):
+    """One candidate per asset (see asset_key). Keeps the largest variant by its w/width param,
+    else the one found in the page (it has a page position) over a network-only one."""
+    def rank(c):
+        q = dict(parse_qsl(urlparse(c["url"]).query))
+        w = next((int(q[k]) for k in ("w", "width") if str(q.get(k, "")).isdigit()), 0)
+        return (w, c["y"] is not None)
+
+    best = {}
+    for c in cands:
+        k = (c["kind"], asset_key(c["url"]))
+        old = best.get(k)
+        keep, drop = (c, old) if old is None or rank(c) > rank(old) else (old, c)
+        if drop is not None and keep["y"] is None:  # keep the page position whichever variant wins
+            keep["y"] = drop["y"]
+        best[k] = keep
+    return list(best.values())
 
 
 # ---------------------------------------------------------------- exploring
@@ -640,7 +721,9 @@ def collect(page, found, bg=False):
             log.debug("collect frame %s failed: %s", getattr(frame, "url", "?")[:60], e)
 
 
-SCROLL_TIMEOUT_S = 90  # hard cap: never spend more than this scrolling one page
+SCROLL_TIMEOUT_S = 180  # hard cap: never spend more than this scrolling one page
+SCROLL_STEP = 0.5       # of the viewport height: small steps so every lazy section enters the viewport
+SCROLL_WAIT_MS = 1000   # per step, so lazy images/videos have time to request their media
 
 
 def scroll_page(page, found):
@@ -648,14 +731,17 @@ def scroll_page(page, found):
     deadline = time.time() + SCROLL_TIMEOUT_S
     for i in range(MAX_SCROLL_STEPS):
         if time.time() > deadline:
-            log.info("scroll_page: 90s cap reached at step %d", i)
+            log.info("scroll_page: %ds cap reached at step %d", SCROLL_TIMEOUT_S, i)
             break
         before = page.evaluate("scrollY")
-        page.evaluate("scrollBy(0, innerHeight * 0.8)")
-        page.wait_for_timeout(400)  # was 250ms; raised to let lazy fetches complete
-        if i % 3 == 0:
+        page.evaluate(f"scrollBy(0, innerHeight * {SCROLL_STEP})")
+        page.wait_for_timeout(SCROLL_WAIT_MS)
+        if i % 2 == 0:
             page.evaluate(PROMOTE_LAZY_JS)
+            page.evaluate(PLAY_VIDEOS_JS)  # videos in view request their src (seen by record_media)
             collect(page, found)
+        if i % 8 == 7:  # some banners only appear after the first scroll
+            dismiss_consent(page, rounds=1)
         if i % 10 == 9:  # every 10 steps, wait briefly for in-flight network requests
             try:
                 page.wait_for_load_state("networkidle", timeout=3000)
@@ -675,38 +761,51 @@ def scroll_page(page, found):
 def click_reveals(page, found):
     """Open tabs, step through carousels and press 'show more' without leaving the page."""
     start = page.url.split("#")[0]
-    clicks = 0
+    clicks, done = 0, set()
     groups = [
-        page.locator("[role=tab]"),
-        page.locator("button[aria-label*='next' i], .swiper-button-next, .slick-next, "
-                     "[class*='carousel' i] [class*='next' i], [class*='arrow-right' i]"),
+        page.locator("[role=tab]:not([aria-selected='true'])"),
+        page.locator(CAROUSEL_NEXT),
         page.get_by_role("button", name=SHOW_MORE_RE),
     ]
     for gi, loc in enumerate(groups):
         try:
-            els = loc.all()[:15]
+            els = loc.all()[:20]
         except PWError:
             continue
         for el in els:
             if clicks >= MAX_CLICKS:
                 break
             try:
-                if not el.is_visible(timeout=200):
+                if not el.is_visible(timeout=200) or not el.is_enabled(timeout=200):
                     continue
                 href = el.get_attribute("href", timeout=500)
                 if href and not href.startswith(("#", "javascript")):
                     continue
+                # centred, not just "in view": at the top edge a sticky header covers it and the click times out
+                el.evaluate("x => x.scrollIntoView({block: 'center', inline: 'center'})")
+                page.wait_for_timeout(300)
+                box = el.bounding_box()
+                spot = box and (round(box["x"]), round(box["y"] + page.evaluate("scrollY")))
+                if spot in done:  # same control matched twice (e.g. a wrapper and its button)
+                    continue
+                done.add(spot)
                 for _ in range(4 if gi == 1 else 1):
-                    el.click(timeout=1500, no_wait_after=True)
+                    try:
+                        el.click(timeout=1500, no_wait_after=True)
+                    except PWError as ex:  # still covered by an overlay: click it in the DOM instead
+                        log.debug("click blocked (%s); using a DOM click", str(ex).splitlines()[0])
+                        el.evaluate("x => x.click()")
                     clicks += 1
-                    page.wait_for_timeout(450)
+                    page.wait_for_timeout(600)
+                page.evaluate(PLAY_VIDEOS_JS)  # a revealed slide/tab's video requests its src
                 # Wait for any lazy media triggered by this click to load
                 try:
                     page.wait_for_load_state("networkidle", timeout=2000)
                 except PWError:
                     pass
                 collect(page, found)
-            except PWError:
+            except PWError as ex:
+                log.debug("skipped a tab/arrow/show-more control: %s", str(ex).splitlines()[0])
                 continue
             if page.url.split("#")[0] != start:
                 log.debug("click navigated to %s; going back", page.url)
@@ -1203,7 +1302,7 @@ def record_scroll(pw, url, out_dir):
     # --- real page is open in (browser, ctx, page) ---
     marks, sections = {}, []
     try:
-        close_cookie_popups(page)
+        dismiss_consent(page)
         # ── mobile layout verification screenshot ──────────────────────────
         try:
             shot_path = out_dir / "mobile_check.png"  # debug screenshot, kept out of the gallery folders
@@ -1353,6 +1452,8 @@ def extract(url, out_dir, tool=None):
             "http_status": state["http_status"], "attempts": state["attempts"], "counts": counts,
             "empty_reasons": {c: r for c, r in state["reasons"].items() if not counts.get(c)},
             "skipped": state.get("skipped", {}), "found": state.get("found", {}),
+            "network_counts": state.get("network_counts", {}), "url_duplicates": state.get("url_duplicates", 0),
+            "counts_by_type": dict(Counter(m.get("type") for m in manifest)),
             "failed_downloads": state.get("failed", []), "embeds": state.get("embeds", []),
             "scroll_video": state.get("scroll_info", {}),
             "viewport": state.get("viewport"), "user_agent": state.get("user_agent"),
@@ -1383,11 +1484,12 @@ def _extract(url, out_dir, state):
             state["reasons"] = {c: state["message"] for c in CATEGORIES}
             return []
         try:
-            close_cookie_popups(page)
+            dismiss_consent(page)
             log.info("> Scrolling the page")
             page.evaluate(PROMOTE_LAZY_JS)
             collect(page, found)
             scroll_page(page, found)
+            dismiss_consent(page, rounds=1)
             click_reveals(page, found)
             try:
                 log.info("scrolled %d nested scrollers", page.evaluate(SCROLL_NESTED_JS))
@@ -1406,8 +1508,14 @@ def _extract(url, out_dir, state):
             for c in cands:
                 if c["kind"] == "img" and is_video_url(c["url"]):
                     c["kind"] = "video"
-            log.info("found %d media URLs (%d in the page, %d from network only)",
-                     len(cands), len(found), len(cands) - len(found))
+            state["network_counts"] = network_counts(state)
+            log.info("network responses: %s", ", ".join(f"{n} {t}" for t, n in state["network_counts"].items()))
+            n_all = len(cands)
+            cands = dedupe_candidates(cands)
+            state["url_duplicates"] = n_all - len(cands)
+            log.info("found %d media URLs (%d in the page, %d from network only); %d were size/format "
+                     "variants of the same asset, %d left", n_all, len(found), n_all - len(found),
+                     state["url_duplicates"], len(cands))
             staged = download_all(pw, ctx, page, cands, staging, raw_dir, state)
         finally:
             browser.close()

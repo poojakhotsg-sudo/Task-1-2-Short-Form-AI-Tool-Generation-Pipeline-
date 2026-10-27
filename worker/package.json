@@ -1,0 +1,27 @@
+{
+  "name": "reel-pipeline-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dedicated Node/TypeScript worker (requirement.md Section 2.1): Playwright capture, ffmpeg media processing, and the /tasks/* HTTP contract Phase 3's orchestrator dispatches to.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
+    "@supabase/supabase-js": "^2.118.0",
+    "express": "^5.1.0",
+    "playwright": "^1.49.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^5.0.5"
+  }
+}

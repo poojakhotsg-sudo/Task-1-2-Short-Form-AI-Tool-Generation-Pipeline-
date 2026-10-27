@@ -18,3 +18,13 @@ venv/
 
 # durable job store (pipeline/db.py)
 data/jobs.db
+
+# node & build artifacts
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.next/
+**/.next/
+*.env.local
+.env*.local

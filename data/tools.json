@@ -63,5 +63,10 @@
     "price_tier": "free",
     "checkout_url": "",
     "comment_keyword": ""
+  },
+  "notion-so.assets": {
+    "price_tier": "free",
+    "checkout_url": "",
+    "comment_keyword": ""
   }
 }
