@@ -35,4 +35,7 @@ export type EventPayloads = {
   };
 };
 
-export const inngest = new Inngest({ id: 'reel-pipeline' });
+export const inngest = new Inngest({
+  id: 'reel-pipeline',
+  eventKey: process.env.INNGEST_EVENT_KEY,
+});
