@@ -43,41 +43,49 @@ export interface NewJob {
 export async function createJob(job: NewJob): Promise<void> {
   const now = new Date().toISOString();
 
-  if (!isSupabaseConfigured()) {
-    memoryJobs.set(job.id, {
-      id: job.id,
-      tool_slug: job.toolSlug,
-      tool_name: job.toolName,
-      url: job.url,
-      job_type: job.jobType,
-      status: 'queued',
-      requested_stages: job.requestedStages,
-      headed: job.headed ?? false,
-      created_at: now,
-      updated_at: now,
-    });
-    return;
-  }
-
-  const supabase = getSupabaseServerClient();
-
-  let toolSlug: string | null = null;
-  if (job.toolSlug) {
-    const { data } = await supabase.from('tools').select('slug').eq('slug', job.toolSlug).limit(1);
-    toolSlug = data?.[0]?.slug ?? null;
-  }
-
-  const { error } = await supabase.from('jobs').insert({
+  // Always store in memory as well for immediate availability
+  memoryJobs.set(job.id, {
     id: job.id,
-    tool_slug: toolSlug,
+    tool_slug: job.toolSlug,
     tool_name: job.toolName,
     url: job.url,
     job_type: job.jobType,
     status: 'queued',
     requested_stages: job.requestedStages,
     headed: job.headed ?? false,
+    created_at: now,
+    updated_at: now,
   });
-  if (error) throw error;
+
+  if (!isSupabaseConfigured()) {
+    return;
+  }
+
+  try {
+    const supabase = getSupabaseServerClient();
+
+    let toolSlug: string | null = null;
+    if (job.toolSlug) {
+      const { data } = await supabase.from('tools').select('slug').eq('slug', job.toolSlug).limit(1);
+      toolSlug = data?.[0]?.slug ?? null;
+    }
+
+    const { error } = await supabase.from('jobs').insert({
+      id: job.id,
+      tool_slug: toolSlug,
+      tool_name: job.toolName,
+      url: job.url,
+      job_type: job.jobType,
+      status: 'queued',
+      requested_stages: job.requestedStages,
+      headed: job.headed ?? false,
+    });
+    if (error) {
+      console.warn('Supabase jobs insert failed (run full_schema.sql in Supabase SQL editor):', error.message);
+    }
+  } catch (err) {
+    console.warn('Supabase not ready, using memory store:', err instanceof Error ? err.message : String(err));
+  }
 }
 
 export async function setJobStatus(
@@ -87,31 +95,43 @@ export async function setJobStatus(
 ): Promise<void> {
   const now = new Date().toISOString();
 
+  const existing = memoryJobs.get(jobId);
+  if (existing) {
+    memoryJobs.set(jobId, { ...existing, status, updated_at: now, ...extra });
+  }
+
   if (!isSupabaseConfigured()) {
-    const existing = memoryJobs.get(jobId);
-    if (existing) {
-      memoryJobs.set(jobId, { ...existing, status, updated_at: now, ...extra });
-    }
     return;
   }
 
-  const supabase = getSupabaseServerClient();
-  const { error } = await supabase
-    .from('jobs')
-    .update({ status, updated_at: now, ...extra })
-    .eq('id', jobId);
-  if (error) throw error;
+  try {
+    const supabase = getSupabaseServerClient();
+    const { error } = await supabase
+      .from('jobs')
+      .update({ status, updated_at: now, ...extra })
+      .eq('id', jobId);
+    if (error) {
+      console.warn('Supabase jobs update error:', error.message);
+    }
+  } catch (err) {
+    console.warn('Supabase update failed:', err);
+  }
 }
 
 export async function isJobStopping(jobId: string): Promise<boolean> {
-  if (!isSupabaseConfigured()) {
-    return memoryJobs.get(jobId)?.status === 'stopping';
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseServerClient();
+      const { data } = await supabase.from('jobs').select('status').eq('id', jobId).limit(1);
+      if (data && data.length > 0) {
+        return data[0]?.status === 'stopping';
+      }
+    } catch {
+      // fallback to memory
+    }
   }
 
-  const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase.from('jobs').select('status').eq('id', jobId).limit(1);
-  if (error) throw error;
-  return data?.[0]?.status === 'stopping';
+  return memoryJobs.get(jobId)?.status === 'stopping';
 }
 
 export async function upsertStageStatus(
@@ -121,54 +141,71 @@ export async function upsertStageStatus(
 ): Promise<void> {
   const now = new Date().toISOString();
 
+  let stageMap = memoryStages.get(jobId);
+  if (!stageMap) {
+    stageMap = new Map();
+    memoryStages.set(jobId, stageMap);
+  }
+  const existing = stageMap.get(stage);
+  stageMap.set(stage, {
+    job_id: jobId,
+    stage,
+    status: (fields.status as string) ?? 'queued',
+    message: (fields.message as string | null) ?? null,
+    updated_at: now,
+    ...(existing || {}),
+    ...fields,
+  });
+
   if (!isSupabaseConfigured()) {
-    let stageMap = memoryStages.get(jobId);
-    if (!stageMap) {
-      stageMap = new Map();
-      memoryStages.set(jobId, stageMap);
-    }
-    const existing = stageMap.get(stage);
-    stageMap.set(stage, {
-      job_id: jobId,
-      stage,
-      status: (fields.status as string) ?? 'queued',
-      message: (fields.message as string | null) ?? null,
-      updated_at: now,
-      ...(existing || {}),
-      ...fields,
-    });
     return;
   }
 
-  const supabase = getSupabaseServerClient();
-  const { error } = await supabase
-    .from('job_stages')
-    .upsert(
-      { job_id: jobId, stage, updated_at: now, ...fields },
-      { onConflict: 'job_id,stage' }
-    );
-  if (error) throw error;
+  try {
+    const supabase = getSupabaseServerClient();
+    const { error } = await supabase
+      .from('job_stages')
+      .upsert(
+        { job_id: jobId, stage, updated_at: now, ...fields },
+        { onConflict: 'job_id,stage' }
+      );
+    if (error) {
+      console.warn('Supabase job_stages upsert error:', error.message);
+    }
+  } catch (err) {
+    console.warn('Supabase job_stages update failed:', err);
+  }
 }
 
 export async function getJob(jobId: string): Promise<StoredJob | null> {
-  if (!isSupabaseConfigured()) {
-    return memoryJobs.get(jobId) ?? null;
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseServerClient();
+      const { data, error } = await supabase.from('jobs').select('*').eq('id', jobId).limit(1);
+      if (!error && data && data.length > 0) {
+        return data[0] as StoredJob;
+      }
+    } catch {
+      // fallback to memory
+    }
   }
 
-  const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase.from('jobs').select('*').eq('id', jobId).limit(1);
-  if (error || !data || data.length === 0) return null;
-  return data[0] as StoredJob;
+  return memoryJobs.get(jobId) ?? null;
 }
 
 export async function getJobStages(jobId: string): Promise<StoredStage[]> {
-  if (!isSupabaseConfigured()) {
-    const stageMap = memoryStages.get(jobId);
-    return stageMap ? Array.from(stageMap.values()) : [];
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseServerClient();
+      const { data, error } = await supabase.from('job_stages').select('*').eq('job_id', jobId);
+      if (!error && data && data.length > 0) {
+        return data as StoredStage[];
+      }
+    } catch {
+      // fallback to memory
+    }
   }
 
-  const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase.from('job_stages').select('*').eq('job_id', jobId);
-  if (error || !data) return [];
-  return data as StoredStage[];
+  const stageMap = memoryStages.get(jobId);
+  return stageMap ? Array.from(stageMap.values()) : [];
 }

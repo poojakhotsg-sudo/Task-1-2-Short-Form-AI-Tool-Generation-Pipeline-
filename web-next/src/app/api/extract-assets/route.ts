@@ -26,38 +26,42 @@ export async function POST(req: NextRequest) {
   const toolSlug = slugify(toolName);
 
   if (isSupabaseConfigured()) {
-    const supabase = getSupabaseServerClient();
+    try {
+      const supabase = getSupabaseServerClient();
 
-    // MC-02: keyword uniqueness check — reject if owned by a different tool
-    if (commentKeyword) {
-      const { data: existing } = await supabase
-        .from('tools')
-        .select('slug')
-        .eq('comment_keyword', commentKeyword)
-        .neq('slug', toolSlug)
-        .limit(1);
-      if (existing && existing.length > 0) {
-        return NextResponse.json(
-          { error: `Keyword '${commentKeyword}' is already used by tool '${existing[0].slug}'` },
-          { status: 409 }
-        );
+      // MC-02: keyword uniqueness check — reject if owned by a different tool
+      if (commentKeyword) {
+        const { data: existing } = await supabase
+          .from('tools')
+          .select('slug')
+          .eq('comment_keyword', commentKeyword)
+          .neq('slug', toolSlug)
+          .limit(1);
+        if (existing && existing.length > 0) {
+          return NextResponse.json(
+            { error: `Keyword '${commentKeyword}' is already used by tool '${existing[0].slug}'` },
+            { status: 409 }
+          );
+        }
       }
-    }
 
-    // MC-01: upsert tool metadata (price tier, checkout URL, keyword)
-    await supabase.from('tools').upsert(
-      {
-        slug:             toolSlug,
-        name:             toolName,
-        url,
-        price_tier:       priceTier ?? 'free',
-        checkout_url:     checkoutUrl ?? null,
-        comment_keyword:  commentKeyword ?? null,
-        has_reel_kit:     false,
-        updated_at:       new Date().toISOString(),
-      },
-      { onConflict: 'slug' }
-    );
+      // MC-01: upsert tool metadata (price tier, checkout URL, keyword)
+      await supabase.from('tools').upsert(
+        {
+          slug:             toolSlug,
+          name:             toolName,
+          url,
+          price_tier:       priceTier ?? 'free',
+          checkout_url:     checkoutUrl ?? null,
+          comment_keyword:  commentKeyword ?? null,
+          has_reel_kit:     false,
+          updated_at:       new Date().toISOString(),
+        },
+        { onConflict: 'slug' }
+      );
+    } catch (err) {
+      console.warn('Supabase tool metadata skipped:', err);
+    }
   }
 
   const jobId = randomUUID();
