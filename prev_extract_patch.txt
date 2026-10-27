@@ -1,5 +1,0 @@
-    if res.get("blocked"):
-        return 0
-    slug = slugify(args.tool)
-    report_file = Path(args.out) / slug / "playwright_report.json"
-    return 0 if (res.get("total_saved", 0) > 0 or report_file.exists()) else 1

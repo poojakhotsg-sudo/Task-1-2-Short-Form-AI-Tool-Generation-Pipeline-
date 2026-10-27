@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "Short-Form AI Tool Generation Pipeline",
   "scripts": {
-    "dev": "python app.py",
-    "start": "python app.py"
+    "dev": "npm run dev --prefix web-next",
+    "build": "npm run build --prefix web-next",
+    "start": "npm run start --prefix web-next"
   }
 }
