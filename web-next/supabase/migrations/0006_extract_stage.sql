@@ -1,0 +1,11 @@
+-- EXTRACT-* asset extraction (job_type = 'extract') is a single-task job,
+-- not a step in PIPE-01's 8-stage reel pipeline, but job_stages (migration
+-- 0001) still needs one row per job to track its progress the same way
+-- every reel-pipeline stage does — and job_stages.stage is constrained to
+-- stage_name, which only had the 8 reel-pipeline values. Without this,
+-- an extract job's job_stages insert would fail the enum check outright.
+--
+-- Postgres requires ALTER TYPE ... ADD VALUE to run outside any other DDL
+-- in the same transaction; kept as the only statement in this migration
+-- for exactly that reason.
+alter type stage_name add value 'extract';
