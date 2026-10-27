@@ -6,5 +6,8 @@
     "dev": "npm run dev --prefix web-next",
     "build": "npm run build --prefix web-next",
     "start": "npm run start --prefix web-next"
+  },
+  "devDependencies": {
+    "next": "16.4.3"
   }
 }
