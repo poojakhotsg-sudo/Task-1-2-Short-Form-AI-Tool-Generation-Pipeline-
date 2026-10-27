@@ -7,7 +7,9 @@
     "build": "npm run build --prefix web-next",
     "start": "npm run start --prefix web-next"
   },
-  "devDependencies": {
-    "next": "16.4.3"
+  "dependencies": {
+    "next": "16.4.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   }
 }
