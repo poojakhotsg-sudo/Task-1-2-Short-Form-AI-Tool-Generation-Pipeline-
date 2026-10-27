@@ -6,6 +6,7 @@ let db: FakeDb;
 
 vi.mock('@/lib/supabase', () => ({
   getSupabaseServerClient: () => createFakeSupabaseClient(db, {}),
+  isSupabaseConfigured: () => true,
 }));
 
 type WorkerResponse = { status: 'ok' | 'error'; message?: string; data?: Record<string, unknown> };

@@ -9,6 +9,12 @@ import { handleRecordMissingShotClips } from './routes/tasks/recordMissingShotCl
 import { handleNormalizeMedia } from './routes/tasks/normalizeMedia.js';
 import { handleExtractMedia } from './routes/tasks/extractMedia.js';
 
+try {
+  process.loadEnvFile();
+} catch {
+  // .env file not found or already loaded
+}
+
 const app = express();
 app.use(express.json({ limit: '1mb' })); // task payloads are small — job IDs, URLs, storage prefixes, never media bytes (Section 2.1)
 

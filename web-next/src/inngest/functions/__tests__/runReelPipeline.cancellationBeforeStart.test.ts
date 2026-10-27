@@ -6,6 +6,7 @@ let db: FakeDb;
 
 vi.mock('@/lib/supabase', () => ({
   getSupabaseServerClient: () => createFakeSupabaseClient(db, {}),
+  isSupabaseConfigured: () => true,
 }));
 
 const { callWorkerTaskMock } = vi.hoisted(() => ({ callWorkerTaskMock: vi.fn() }));

@@ -19,7 +19,8 @@ function constantTimeEquals(a: string, b: string): boolean {
 }
 
 export function requireWorkerAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!WORKER_AUTH_TOKEN) {
+  const expected = process.env.WORKER_AUTH_TOKEN || WORKER_AUTH_TOKEN;
+  if (!expected) {
     res.status(500).json({ status: 'error', message: 'WORKER_AUTH_TOKEN is not configured' });
     return;
   }
@@ -27,7 +28,7 @@ export function requireWorkerAuth(req: Request, res: Response, next: NextFunctio
   const header = req.header('authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
 
-  if (!token || !constantTimeEquals(token, WORKER_AUTH_TOKEN)) {
+  if (!token || !constantTimeEquals(token, expected)) {
     res.status(401).json({ status: 'error', message: 'Invalid or missing Authorization header' });
     return;
   }
