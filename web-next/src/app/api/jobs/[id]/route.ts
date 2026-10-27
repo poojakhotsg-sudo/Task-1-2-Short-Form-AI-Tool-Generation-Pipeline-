@@ -2,7 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { inngest } from '@/lib/inngest';
-import { getJob, getJobStages, setJobStatus } from '@/lib/jobState';
+import { getJob, getJobStages, getJobAssets, setJobStatus } from '@/lib/jobState';
 
 // GET /api/jobs/:id — replaces GET /api/job/{id}?since= (PLAT-01).
 export async function GET(
@@ -18,7 +18,8 @@ export async function GET(
     }
 
     const stages = await getJobStages(id);
-    return NextResponse.json({ job, stages });
+    const assets = await getJobAssets(id);
+    return NextResponse.json({ job, stages, assets });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to fetch job' },

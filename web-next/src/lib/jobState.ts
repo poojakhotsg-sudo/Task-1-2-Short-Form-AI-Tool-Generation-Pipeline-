@@ -209,3 +209,75 @@ export async function getJobStages(jobId: string): Promise<StoredStage[]> {
   const stageMap = memoryStages.get(jobId);
   return stageMap ? Array.from(stageMap.values()) : [];
 }
+
+export interface ExtractedAssetItem {
+  id?: string;
+  filename: string;
+  category: 'videos' | 'gifs' | 'images' | 'svgs' | 'embeds' | 'videos_gifs' | string;
+  storageKey: string;
+  url: string;
+  sourceUrl?: string;
+  width?: number | null;
+  height?: number | null;
+  durationSeconds?: number | null;
+  sizeBytes: number;
+  pageOrder: number;
+  section?: string;
+}
+
+const memoryAssets = new Map<string, ExtractedAssetItem[]>();
+
+export async function saveJobAssets(jobId: string, assets: ExtractedAssetItem[]): Promise<void> {
+  memoryAssets.set(jobId, assets);
+
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseServerClient();
+      const rows = assets.map(a => ({
+        job_id: jobId,
+        kind: 'extract',
+        category: a.category,
+        storage_key: a.storageKey || a.url,
+        filename: a.filename,
+        source_url: a.sourceUrl || a.url,
+        width: a.width ?? null,
+        height: a.height ?? null,
+        duration_seconds: a.durationSeconds ?? null,
+        size_bytes: a.sizeBytes || 0,
+        page_order: a.pageOrder || 0,
+      }));
+      await supabase.from('assets').insert(rows);
+    } catch (err) {
+      console.warn('Supabase asset save skipped:', err);
+    }
+  }
+}
+
+export async function getJobAssets(jobId: string): Promise<ExtractedAssetItem[]> {
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseServerClient();
+      const { data, error } = await supabase.from('assets').select('*').eq('job_id', jobId);
+      if (!error && data && data.length > 0) {
+        return data.map((d: any) => ({
+          id: d.id,
+          filename: d.filename,
+          category: d.category,
+          storageKey: d.storage_key,
+          url: d.source_url || d.storage_key,
+          sourceUrl: d.source_url,
+          width: d.width,
+          height: d.height,
+          durationSeconds: d.duration_seconds,
+          sizeBytes: d.size_bytes || 0,
+          pageOrder: d.page_order || 0,
+          section: d.section_heading || '',
+        }));
+      }
+    } catch {
+      // fallback to memory
+    }
+  }
+
+  return memoryAssets.get(jobId) || [];
+}

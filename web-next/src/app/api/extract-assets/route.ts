@@ -6,6 +6,7 @@ import { extractAssetsSchema } from '@/lib/validation';
 import { inngest } from '@/lib/inngest';
 import { createJob } from '@/lib/jobState';
 import { getSupabaseServerClient, isSupabaseConfigured } from '@/lib/supabase';
+import { runLocalExtraction } from '@/lib/extractorService';
 
 // POST /api/extract-assets — single-tool extraction with Reel Kit options
 export async function POST(req: NextRequest) {
@@ -75,6 +76,11 @@ export async function POST(req: NextRequest) {
       jobType: 'extract',
       requestedStages: ['extract'],
       headed,
+    });
+
+    // Trigger local extraction in background
+    runLocalExtraction(jobId, url, toolName, toolSlug, headed).catch(err => {
+      console.error('Background extraction error:', err);
     });
 
     try {
